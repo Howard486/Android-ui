@@ -171,6 +171,13 @@ class ContextEngine(
             return
         }
 
+        // §7.1 — a model is not allowed to nominate 簡易 either, however
+        // confident it is. Only the user puts themselves in simplified mode.
+        if (result.space.isUserSelectableOnly) {
+            publish(ContextDecision.NoAction)
+            return
+        }
+
         val decision = ContextDecision(
             space = result.space,
             source = DecisionSource.NanoClassification,

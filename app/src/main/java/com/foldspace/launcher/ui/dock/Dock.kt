@@ -18,6 +18,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.foldspace.launcher.core.launcher.AppEntry
 import com.foldspace.launcher.notifications.NotificationSummary
+import com.foldspace.launcher.spaces.SpaceDensity
 import com.foldspace.launcher.ui.components.AppTile
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 
@@ -35,6 +36,7 @@ fun Dock(
     onLaunch: (AppEntry) -> Unit,
     onLongPress: (AppEntry) -> Unit,
     modifier: Modifier = Modifier,
+    density: SpaceDensity = SpaceDensity.Standard,
 ) {
     val tokens = FoldSpaceTheme.tokens
 
@@ -58,7 +60,7 @@ fun Dock(
                 entry = entry,
                 onClick = { onLaunch(entry) },
                 onLongClick = { onLongPress(entry) },
-                iconSize = 46.dp,
+                iconSize = density.dockIconSizeDp.dp,
                 showLabel = false,
                 badgeCount = notifications.countFor(entry.packageName),
             )

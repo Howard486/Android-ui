@@ -51,7 +51,7 @@ rather than failing (§21.1).
 | §5.4 | Dynamic Dock — fixed pins + usage-driven smart slots | ✅ |
 | §5.5 | App/package search | ✅ (settings & AI commands are V1.0) |
 | §4 | Folded / Expanded / Tabletop / Book layouts via `WindowInfoTracker` | ✅ |
-| §3 | Six Spaces, each with its own dock, cards, policy and theme | ✅ |
+| §3 | Three Spaces — 通用 / 工作 / 簡易 — each with its own dock, cards, density, policy and theme | ✅ |
 | §7 | Context Engine: signals → snapshot → fingerprint cache → rules | ✅ |
 | §7.2 | Manual / Suggest-first / Automatic switch modes | ✅ |
 | §10 | `NotificationListenerService`, 4-tier rule classification, badges, digest | ✅ |
@@ -63,6 +63,36 @@ rather than failing (§21.1).
 | §8 | Gemini Nano — boundary defined, capability-detected, **no model wired** | ⏳ V0.5 |
 | §13 | `AppWidgetHost` third-party widget hosting | ⏳ V0.5 |
 | §14.2 | Private Space container UX | ⏳ V1.0 |
+
+### Spaces — 通用 / 工作 / 簡易
+
+The spec lists six situational Spaces (§3). This build ships three, and the
+third is a different *kind* of thing from the other two:
+
+| Space | Density | Notifications | Theme | Switched by |
+|---|---|---|---|---|
+| **通用** | Standard — 4 cols, 52dp icons | Info and above | Minimal | context or user |
+| **工作** | Standard — 4 cols, 52dp icons | Info and above | Executive | context or user |
+| **簡易** | Simplified — 3 cols, 72dp icons, labels always on, 3 dock slots | Action and above | True Black | **user only** |
+
+簡易 is a real simplified mode, not a renamed label: `SpaceDensity` drives icon
+size, column count, dock slot count, drawer cell width and label visibility
+through the folded, unfolded, tabletop and book layouts alike. True Black is
+its theme because it is the highest-contrast preset and its motion level is
+already `None`.
+
+**The Context Engine may never select 簡易.** `SpaceId.isUserSelectableOnly`
+gates it out of the scoring pass, and `ContextEngine` rejects a Nano result
+naming it however confident the model is. Simplified mode is a person's
+decision about their own interface; a launcher that decides on its own that
+you should be moved into an easier one is making a judgement it has no
+business making. A rule the user writes themselves may target it — that is
+still their decision.
+
+With 夜間 gone, night-time charging is handled entirely by the Power Dock's
+Bedside mode (§11.2). The old `CHARGING_AT_NIGHT` Space suggestion was
+removed rather than repointed: it would have prompted for a switch that
+changes nothing the user can see.
 
 ### Deliberate deviations from the spec
 
@@ -142,10 +172,10 @@ simulates or forwards a payment gesture.
 ./gradlew testDebugUnitTest
 ```
 
-27 unit tests cover the parts §21.2 requires to be provable: fingerprint
+30 unit tests cover the parts §21.2 requires to be provable: fingerprint
 stability, the §7.1 decision ladder, that Nano is unreachable in the
-background / in battery saver / on an unsupported device, and the §11.2 Power
-Dock trigger table.
+background / in battery saver / on an unsupported device and cannot nominate
+簡易, and the §11.2 Power Dock trigger table.
 
 The Compose layer has no tests yet — that is the first gap to close.
 

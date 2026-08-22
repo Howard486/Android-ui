@@ -133,6 +133,7 @@ fun FoldSpaceRoot(
                 },
                 onLongPress = viewModel::openAppInfo,
                 contentPadding = systemPadding,
+                density = state.spaceConfig.density,
             )
         }
 

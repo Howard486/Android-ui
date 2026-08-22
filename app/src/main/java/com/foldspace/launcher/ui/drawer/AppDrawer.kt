@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.foldspace.launcher.core.launcher.AppEntry
 import com.foldspace.launcher.core.launcher.ProfileType
 import com.foldspace.launcher.notifications.NotificationSummary
+import com.foldspace.launcher.spaces.SpaceDensity
 import com.foldspace.launcher.ui.components.AppTile
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 
@@ -60,6 +61,7 @@ fun AppDrawer(
     onLongPress: (AppEntry) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    density: SpaceDensity = SpaceDensity.Standard,
 ) {
     val tokens = FoldSpaceTheme.tokens
     var query by remember { mutableStateOf("") }
@@ -128,7 +130,7 @@ fun AppDrawer(
                         onClick = { onLaunch(entry) },
                         onLongClick = { onLongPress(entry) },
                         modifier = Modifier.weight(1f),
-                        iconSize = 44.dp,
+                        iconSize = density.iconSizeDp.dp,
                         badgeCount = notifications.countFor(entry.packageName),
                     )
                 }
@@ -154,7 +156,7 @@ fun AppDrawer(
         SectionHeader(if (query.isBlank()) "全部 App · ${visible.size}" else "搜尋結果 · ${visible.size}")
 
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(80.dp),
+            columns = GridCells.Adaptive(density.drawerCellDp.dp),
             modifier = Modifier.fillMaxSize(),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -165,6 +167,7 @@ fun AppDrawer(
                     entry = entry,
                     onClick = { onLaunch(entry) },
                     onLongClick = { onLongPress(entry) },
+                    iconSize = density.iconSizeDp.dp,
                     badgeCount = notifications.countFor(entry.packageName),
                 )
             }

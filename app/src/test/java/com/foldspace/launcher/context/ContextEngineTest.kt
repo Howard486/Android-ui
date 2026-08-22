@@ -109,12 +109,28 @@ class ContextEngineTest {
     }
 
     @Test
+    fun `nano may not nominate the simplified Space`() = runTest {
+        // §7.1 — 簡易 is the user's choice about their own interface. A model
+        // deciding you should be moved into an easier one is a judgement it
+        // has no business making, however confident it is.
+        val nano = CountingNano(
+            result = NanoContextResult(SpaceId.Simple, 0.99f, "SIMPLE"),
+        )
+        val engine = engine(nano, TestScope(UnconfinedTestDispatcher(testScheduler)))
+
+        engine.enterAmbiguousForeground()
+
+        assertEquals(1, nano.calls)
+        assertNull(engine.suggestion.value)
+    }
+
+    @Test
     fun `a manual pick clears the suggestion`() = runTest {
         val nano = CountingNano()
         val engine = engine(nano, TestScope(UnconfinedTestDispatcher(testScheduler)))
 
         engine.enterAmbiguousForeground()
-        engine.setUserOverride(SpaceId.Focus)
+        engine.setUserOverride(SpaceId.Simple)
 
         assertNull(engine.suggestion.value)
     }

@@ -80,7 +80,8 @@ class RuleEngine(private val rules: List<AutomationRule> = emptyList()) {
 
     fun evaluate(snapshot: ContextSnapshot, switchMode: SwitchMode): ContextDecision {
         // Level 2 — explicit user automation. Allowed to apply directly, but
-        // still only when the user has opted into Automatic.
+        // still only when the user has opted into Automatic. A rule the user
+        // wrote themselves may target 簡易; nothing below this level may.
         rules.firstOrNull { it.enabled && it.matcher.matches(snapshot) }?.let { rule ->
             return ContextDecision(
                 space = rule.target,
@@ -99,20 +100,16 @@ class RuleEngine(private val rules: List<AutomationRule> = emptyList()) {
     }
 
     private fun deterministic(snapshot: ContextSnapshot): ContextDecision? {
-        // Charging at night is the clearest signal the product has: it is the
-        // Bedside dock case, and it does not need a model to work out.
-        if (snapshot.charging && snapshot.timeBucket == TimeBucket.Night) {
-            return ContextDecision(
-                space = SpaceId.Night,
-                source = DecisionSource.DeterministicEvent,
-                confidence = 0.95f,
-                reasonCode = "CHARGING_AT_NIGHT",
-                apply = false,
-            )
-        }
+        // Connecting to a car is the one unambiguous "you have stopped working"
+        // signal in the table, and it needs no model to read.
+        //
+        // There is no night-charging rule here any more: with 夜間 gone as a
+        // Space, that case is entirely the Power Dock's (§11.2 Bedside), and
+        // duplicating it as a Space suggestion would prompt the user for a
+        // switch that changes nothing they can see.
         if (snapshot.bluetoothClass == BluetoothClass.Car) {
             return ContextDecision(
-                space = SpaceId.Travel,
+                space = SpaceId.General,
                 source = DecisionSource.DeterministicEvent,
                 confidence = 0.9f,
                 reasonCode = "BT_CAR_CONNECTED",
@@ -133,17 +130,28 @@ class RuleEngine(private val rules: List<AutomationRule> = emptyList()) {
         if (snapshot.calendarCategory != null) {
             scores.merge(SpaceId.Work, 0.3f, Float::plus)
         }
-        if (snapshot.bluetoothClass == BluetoothClass.Audio) {
-            scores.merge(SpaceId.Media, 0.4f, Float::plus)
-        }
+        // Everything that says "not working" lands on 通用. Individually these
+        // are weak; together — evening plus headphones, say — they clear the
+        // threshold, which is the behaviour we want.
         if (snapshot.timeBucket == TimeBucket.Evening) {
-            scores.merge(SpaceId.Home, 0.35f, Float::plus)
+            scores.merge(SpaceId.General, 0.35f, Float::plus)
         }
         if (snapshot.timeBucket == TimeBucket.Night) {
-            scores.merge(SpaceId.Night, 0.4f, Float::plus)
+            scores.merge(SpaceId.General, 0.4f, Float::plus)
+        }
+        if (!snapshot.isWeekday) {
+            scores.merge(SpaceId.General, 0.3f, Float::plus)
+        }
+        if (snapshot.bluetoothClass == BluetoothClass.Audio) {
+            scores.merge(SpaceId.General, 0.3f, Float::plus)
         }
 
-        val best = scores.maxByOrNull { it.value } ?: return ContextDecision.NoAction
+        // §7.1 — 簡易 is never scored into; see SpaceId.isUserSelectableOnly.
+        val best = scores.entries
+            .filterNot { it.key.isUserSelectableOnly }
+            .maxByOrNull { it.value }
+            ?: return ContextDecision.NoAction
+
         if (best.value < SUGGEST_THRESHOLD) return ContextDecision.NoAction
 
         return ContextDecision(

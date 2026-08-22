@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.foldspace.launcher.core.launcher.AppEntry
 import com.foldspace.launcher.spaces.CardId
+import com.foldspace.launcher.spaces.SpaceDensity
 import com.foldspace.launcher.ui.LauncherUiState
 import com.foldspace.launcher.ui.cards.ClockCard
 import com.foldspace.launcher.ui.cards.NativeCard
@@ -43,7 +44,8 @@ fun CompactHome(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
-    val topApps = state.dockApps().take(COMPACT_MAX_APPS)
+    val density = state.spaceConfig.density
+    val topApps = state.dockApps().take(density.compactMaxApps)
 
     Column(
         modifier = modifier
@@ -69,7 +71,7 @@ fun CompactHome(
         Column {
             if (topApps.isNotEmpty()) {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(COMPACT_COLUMNS),
+                    columns = GridCells.Fixed(density.compactColumns),
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -80,6 +82,7 @@ fun CompactHome(
                             entry = entry,
                             onClick = { onLaunch(entry) },
                             onLongClick = { onLongPress(entry) },
+                            iconSize = density.iconSizeDp.dp,
                             badgeCount = state.notifications.countFor(entry.packageName),
                         )
                     }
@@ -88,10 +91,11 @@ fun CompactHome(
             }
 
             Dock(
-                apps = state.dockApps().take(COMPACT_DOCK_SLOTS),
+                apps = state.dockApps().take(density.compactDockSlots()),
                 notifications = state.notifications,
                 onLaunch = onLaunch,
                 onLongPress = onLongPress,
+                density = density,
             )
             Spacer(Modifier.height(8.dp))
         }
@@ -110,6 +114,7 @@ fun ExpandedWorkspace(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
+    val density = state.spaceConfig.density
     val cards = state.spaceConfig.cards
     val columns = if (state.window.widthDp >= THREE_COLUMN_WIDTH_DP) 3 else 2
     val apps = state.dockApps()
@@ -154,7 +159,7 @@ fun ExpandedWorkspace(
                     .fillMaxHeight(),
             ) {
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(84.dp),
+                    columns = GridCells.Adaptive(density.drawerCellDp.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
@@ -166,6 +171,7 @@ fun ExpandedWorkspace(
                             entry = entry,
                             onClick = { onLaunch(entry) },
                             onLongClick = { onLongPress(entry) },
+                            iconSize = density.iconSizeDp.dp,
                             badgeCount = state.notifications.countFor(entry.packageName),
                         )
                     }
@@ -179,6 +185,7 @@ fun ExpandedWorkspace(
             notifications = state.notifications,
             onLaunch = onLaunch,
             onLongPress = onLongPress,
+            density = density,
         )
         Spacer(Modifier.height(12.dp))
     }
@@ -243,6 +250,7 @@ fun TabletopHome(
                 notifications = state.notifications,
                 onLaunch = onLaunch,
                 onLongPress = onLongPress,
+                density = state.spaceConfig.density,
             )
             Spacer(Modifier.height(12.dp))
         }
@@ -322,15 +330,16 @@ fun BookHome(
                 notifications = state.notifications,
                 onLaunch = onLaunch,
                 onLongPress = onLongPress,
+                density = state.spaceConfig.density,
             )
         }
     }
 }
 
-/** §4.1 — "最多 4–8 個主要 Apps". */
-private const val COMPACT_MAX_APPS = 8
-private const val COMPACT_COLUMNS = 4
-private const val COMPACT_DOCK_SLOTS = 4
+/** §4.1 caps the folded dock; Simplified drops a slot to keep 60dp icons clear
+ *  of the screen edges. */
+private fun SpaceDensity.compactDockSlots(): Int = if (this == SpaceDensity.Simplified) 3 else 4
+
 private const val EXPANDED_DOCK_SLOTS = 6
 private const val TABLETOP_DOCK_SLOTS = 5
 private const val THREE_COLUMN_WIDTH_DP = 840
