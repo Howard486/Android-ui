@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Two panels hinged at the centre: the fold, which is the whole product. -->
+    <path
+        android:pathData="M32,34 L52,34 L52,74 L32,74 Z"
+        android:fillColor="#FF6EA8FF" />
+    <path
+        android:pathData="M56,38 L76,34 L76,74 L56,70 Z"
+        android:fillColor="#FF9C6BFF" />
+    <path
+        android:pathData="M54,30 L54,78"
+        android:strokeColor="#FFE8ECF4"
+        android:strokeWidth="2"
+        android:strokeLineCap="round" />
+</vector>

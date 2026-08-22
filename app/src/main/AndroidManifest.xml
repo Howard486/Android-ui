@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- §16 Permission matrix. Everything here is either a normal permission,
+         a system broadcast, or a special access the user grants explicitly in
+         Settings; none of it is silent. -->
+
+    <!-- Usage context (§7). Special access: granted via Settings > Usage access. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Bluetooth context signal (§7). Runtime permission on API 31+. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Calendar card (§13) reads the local Calendar Provider only. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+
+    <!-- Needed so the drawer can resolve icons/labels for every launchable app. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
+    <!-- Widget hosting (§13). -->
+    <uses-permission android:name="android.permission.BIND_APPWIDGET"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Wallpaper shows through the launcher background. -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+
+    <!-- Private Space support is V1.0 (§20.3); the permission is declared but
+         the feature is gated on both ROLE_HOME and API 35 at runtime. -->
+    <uses-permission android:name="android.permission.ACCESS_HIDDEN_PROFILES" />
+
+    <application
+        android:name=".FoldSpaceApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.FoldSpace">
+
+        <!--
+          §5.1 Default Home. The HOME + DEFAULT categories are what make this
+          activity eligible for ROLE_HOME.
+
+          - launchMode singleTask + clearTaskOnLaunch: pressing Home always
+            returns to a clean launcher rather than stacking instances.
+          - stateNotNeeded: the system may kill and relaunch the home activity
+            without saved state, so it must survive that.
+          - excludeFromRecents: a launcher does not belong in the recents list.
+          - configChanges: fold/unfold must not recreate the activity, or the
+            §21.1 "UI state is not lost across fold" gate fails.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:clearTaskOnLaunch="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|density|keyboard|keyboardHidden|navigation|uiMode"
+            android:enabled="true"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:screenOrientation="unspecified"
+            android:stateNotNeeded="true"
+            android:windowSoftInputMode="adjustResize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          §10 Notification Intelligence. The user must grant Notification
+          Listener Access in system settings; until then the service is simply
+          never bound and the UI degrades to "no notification data" (§21.1).
+        -->
+        <service
+            android:name=".notifications.FoldSpaceNotificationListener"
+            android:exported="true"
+            android:label="@string/notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!--
+          §11.2 Power Dock trigger. ACTION_POWER_CONNECTED/DISCONNECTED cannot
+          be received from a manifest-declared receiver on API 26+, so this one
+          is registered at runtime (see PowerSignalSource). It stays declared
+          for BOOT_COMPLETED-style additions later, disabled by default.
+        -->
+        <receiver
+            android:name=".context.signals.PowerConnectionReceiver"
+            android:enabled="false"
+            android:exported="false" />
+
+    </application>
+
+</manifest>

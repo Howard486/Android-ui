@@ -1,0 +1,162 @@
+package com.foldspace.launcher.context
+
+import com.foldspace.launcher.spaces.SpaceId
+
+/**
+ * §7.1 decision ladder. Lower ordinal wins; the engine stops at the first
+ * source that produces an answer, so Nano is only ever reached when
+ * everything deterministic has declined to decide.
+ */
+enum class DecisionSource {
+    UserOverride,
+    ExplicitRule,
+    DeterministicEvent,
+    ContextScore,
+    NanoClassification,
+    None,
+}
+
+/**
+ * What the engine decided. [ContextDecision.apply] distinguishes "switch now"
+ * from "offer a switch" — §7.2 defaults to suggest-first, and AI results are
+ * never allowed to switch on their own.
+ */
+data class ContextDecision(
+    val space: SpaceId?,
+    val source: DecisionSource,
+    val confidence: Float,
+    val reasonCode: String,
+    val apply: Boolean,
+) {
+    companion object {
+        val NoAction = ContextDecision(
+            space = null,
+            source = DecisionSource.None,
+            confidence = 0f,
+            reasonCode = "NO_SIGNAL",
+            apply = false,
+        )
+    }
+}
+
+/** §7.2 — how much authority the engine has. */
+enum class SwitchMode { ManualOnly, SuggestFirst, Automatic }
+
+/**
+ * A user-authored automation rule (§7.1 level 2). These are the only rules
+ * allowed to switch a Space outright, because the user wrote them.
+ */
+data class AutomationRule(
+    val id: String,
+    val target: SpaceId,
+    val matcher: RuleMatcher,
+    val enabled: Boolean = true,
+)
+
+data class RuleMatcher(
+    val timeBuckets: Set<TimeBucket> = emptySet(),
+    val weekdayOnly: Boolean = false,
+    val charging: Boolean? = null,
+    val bluetoothClass: BluetoothClass? = null,
+    val calendarCategory: String? = null,
+) {
+    fun matches(snapshot: ContextSnapshot): Boolean {
+        if (timeBuckets.isNotEmpty() && snapshot.timeBucket !in timeBuckets) return false
+        if (weekdayOnly && !snapshot.isWeekday) return false
+        charging?.let { if (snapshot.charging != it) return false }
+        bluetoothClass?.let { if (snapshot.bluetoothClass != it) return false }
+        calendarCategory?.let { if (!snapshot.calendarCategory.equals(it, ignoreCase = true)) return false }
+        // An all-empty matcher would fire on everything; treat it as inert.
+        return timeBuckets.isNotEmpty() || charging != null ||
+            bluetoothClass != null || calendarCategory != null
+    }
+}
+
+/**
+ * §7 Rule Engine. Deterministic, cheap, and always consulted before the AI —
+ * "規則能解決，不跑 AI" (§1.2 rule 2).
+ */
+class RuleEngine(private val rules: List<AutomationRule> = emptyList()) {
+
+    fun evaluate(snapshot: ContextSnapshot, switchMode: SwitchMode): ContextDecision {
+        // Level 2 — explicit user automation. Allowed to apply directly, but
+        // still only when the user has opted into Automatic.
+        rules.firstOrNull { it.enabled && it.matcher.matches(snapshot) }?.let { rule ->
+            return ContextDecision(
+                space = rule.target,
+                source = DecisionSource.ExplicitRule,
+                confidence = 1f,
+                reasonCode = "USER_RULE_${rule.id}",
+                apply = switchMode == SwitchMode.Automatic,
+            )
+        }
+
+        // Level 3 — deterministic system events that need no scoring at all.
+        deterministic(snapshot)?.let { return it }
+
+        // Level 4 — context score. Suggest only; never applied on its own.
+        return score(snapshot)
+    }
+
+    private fun deterministic(snapshot: ContextSnapshot): ContextDecision? {
+        // Charging at night is the clearest signal the product has: it is the
+        // Bedside dock case, and it does not need a model to work out.
+        if (snapshot.charging && snapshot.timeBucket == TimeBucket.Night) {
+            return ContextDecision(
+                space = SpaceId.Night,
+                source = DecisionSource.DeterministicEvent,
+                confidence = 0.95f,
+                reasonCode = "CHARGING_AT_NIGHT",
+                apply = false,
+            )
+        }
+        if (snapshot.bluetoothClass == BluetoothClass.Car) {
+            return ContextDecision(
+                space = SpaceId.Travel,
+                source = DecisionSource.DeterministicEvent,
+                confidence = 0.9f,
+                reasonCode = "BT_CAR_CONNECTED",
+                apply = false,
+            )
+        }
+        return null
+    }
+
+    private fun score(snapshot: ContextSnapshot): ContextDecision {
+        val scores = mutableMapOf<SpaceId, Float>()
+
+        if (snapshot.isWeekday &&
+            snapshot.timeBucket in setOf(TimeBucket.Morning, TimeBucket.Afternoon)
+        ) {
+            scores.merge(SpaceId.Work, 0.45f, Float::plus)
+        }
+        if (snapshot.calendarCategory != null) {
+            scores.merge(SpaceId.Work, 0.3f, Float::plus)
+        }
+        if (snapshot.bluetoothClass == BluetoothClass.Audio) {
+            scores.merge(SpaceId.Media, 0.4f, Float::plus)
+        }
+        if (snapshot.timeBucket == TimeBucket.Evening) {
+            scores.merge(SpaceId.Home, 0.35f, Float::plus)
+        }
+        if (snapshot.timeBucket == TimeBucket.Night) {
+            scores.merge(SpaceId.Night, 0.4f, Float::plus)
+        }
+
+        val best = scores.maxByOrNull { it.value } ?: return ContextDecision.NoAction
+        if (best.value < SUGGEST_THRESHOLD) return ContextDecision.NoAction
+
+        return ContextDecision(
+            space = best.key,
+            source = DecisionSource.ContextScore,
+            confidence = best.value.coerceAtMost(1f),
+            reasonCode = "CONTEXT_SCORE",
+            apply = false,
+        )
+    }
+
+    private companion object {
+        /** Below this the engine says nothing rather than nagging. */
+        const val SUGGEST_THRESHOLD = 0.6f
+    }
+}
