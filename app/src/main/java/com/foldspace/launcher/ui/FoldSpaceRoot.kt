@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -37,7 +38,11 @@ import com.foldspace.launcher.spaces.SpaceId
 import com.foldspace.launcher.ui.components.FoldCard
 import com.foldspace.launcher.ui.components.Pill
 import com.foldspace.launcher.home.HomeItem
+import com.foldspace.launcher.home.HomeItemType
 import com.foldspace.launcher.home.HomeLayout
+import com.foldspace.launcher.ui.feed.FeedPage
+import com.foldspace.launcher.ui.home.FolderSheet
+import com.foldspace.launcher.ui.work.WorkItemsPage
 import com.foldspace.launcher.ui.drawer.AppSearchOverlay
 import com.foldspace.launcher.ui.home.BookHome
 import com.foldspace.launcher.ui.home.PagedHome
@@ -67,12 +72,27 @@ fun FoldSpaceRoot(
     onOpenUsageSettings: () -> Unit,
     onRequestDefaultHome: () -> Unit,
     onExpandStatusBar: () -> Unit,
+    onOpenLink: (String) -> Unit,
+    onOpenPackage: (String) -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val drawerOpen by viewModel.drawerOpen.collectAsStateWithLifecycle()
     val notificationCenterOpen by viewModel.notificationCenterOpen.collectAsStateWithLifecycle()
     val settingsOpen by viewModel.settingsOpen.collectAsStateWithLifecycle()
     val homeLayout by viewModel.homeLayout.collectAsStateWithLifecycle()
+    val editing by viewModel.editing.collectAsStateWithLifecycle()
+    val openFolderId by viewModel.openFolderId.collectAsStateWithLifecycle()
+    val feedState by viewModel.feedState.collectAsStateWithLifecycle()
+    val workItems by viewModel.workItems.collectAsStateWithLifecycle()
+    val organiseMessage by viewModel.organiseMessage.collectAsStateWithLifecycle()
+
+    val openFolder = remember(openFolderId, homeLayout) {
+        openFolderId?.let { id ->
+            homeLayout.pages
+                .flatMap { it.items }
+                .firstOrNull { it.id == id && it.type == HomeItemType.Folder }
+        }
+    }
 
     val tokens = FoldSpaceTheme.tokens
 
@@ -84,13 +104,15 @@ fun FoldSpaceRoot(
             GestureZones.reservedBottomPadding(state.settings.samsungWalletCompatibility),
     )
 
-    val anyOverlayOpen = drawerOpen || notificationCenterOpen || settingsOpen
+    val anyOverlayOpen = drawerOpen || notificationCenterOpen || settingsOpen || openFolder != null
 
     // Back on a launcher means "close whatever is open", never "leave".
-    BackHandler(enabled = anyOverlayOpen) {
+    BackHandler(enabled = anyOverlayOpen || editing) {
         viewModel.setDrawerOpen(false)
         viewModel.setNotificationCenterOpen(false)
         viewModel.setSettingsOpen(false)
+        viewModel.closeFolder()
+        viewModel.setEditing(false)
     }
 
     Box(
@@ -115,6 +137,28 @@ fun FoldSpaceRoot(
                 layout = homeLayout,
                 onLaunchItem = viewModel::launch,
                 onItemLongPress = viewModel::onHomeItemLongPress,
+                editing = editing,
+                widgetHost = viewModel.widgetHost(),
+                onOpenFolder = viewModel::openFolder,
+                onMoveItem = viewModel::moveItem,
+                onDropOnto = viewModel::dropOnto,
+                onToggleEditing = { viewModel.setEditing(!editing) },
+                feedContent = {
+                    FeedPage(
+                        state = feedState,
+                        onRefresh = { viewModel.refreshFeed() },
+                        onOpen = { item -> item.link?.let(onOpenLink) },
+                        contentPadding = systemPadding,
+                    )
+                },
+                workContent = {
+                    WorkItemsPage(
+                        state = workItems,
+                        onOpenApp = onOpenPackage,
+                        onRequestNotificationAccess = onOpenNotificationSettings,
+                        contentPadding = systemPadding,
+                    )
+                },
                 onLaunch = viewModel::launch,
                 onLongPress = viewModel::togglePin,
                 onSwipeUp = { viewModel.setDrawerOpen(true) },
@@ -152,6 +196,37 @@ fun FoldSpaceRoot(
             )
         }
 
+        openFolder?.let { folder ->
+            FolderSheet(
+                folder = folder,
+                density = state.spaceConfig.density,
+                onLaunch = {
+                    viewModel.closeFolder()
+                    viewModel.launch(it)
+                },
+                onRename = viewModel::renameOpenFolder,
+                onRemoveFromFolder = viewModel::removeFromFolder,
+                onDismiss = viewModel::closeFolder,
+                contentPadding = systemPadding,
+            )
+        }
+
+        organiseMessage?.let { message ->
+            OrganiseToast(
+                message = message,
+                canUndo = viewModel.canUndoOrganise,
+                onUndo = viewModel::undoOrganise,
+                onDismiss = viewModel::dismissOrganiseMessage,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(
+                        start = 16.dp,
+                        end = 16.dp,
+                        bottom = systemPadding.calculateBottomPadding() + 24.dp,
+                    ),
+            )
+        }
+
         Overlay(visible = settingsOpen) {
             SettingsScreen(
                 state = state,
@@ -164,6 +239,11 @@ fun FoldSpaceRoot(
                 onRequestDefaultHome = onRequestDefaultHome,
                 onRequestNotificationAccess = onOpenNotificationSettings,
                 onRequestUsageAccess = onOpenUsageSettings,
+                onOrganiseApps = {
+                    viewModel.setSettingsOpen(false)
+                    viewModel.organiseApps()
+                },
+                onAddWidgetPage = viewModel::addWidgetPage,
                 onClose = { viewModel.setSettingsOpen(false) },
                 contentPadding = systemPadding,
             )
@@ -188,6 +268,14 @@ private fun HomeSurface(
     layout: HomeLayout,
     onLaunchItem: (HomeItem) -> Unit,
     onItemLongPress: (HomeItem) -> Unit,
+    editing: Boolean,
+    widgetHost: com.foldspace.launcher.widgets.WidgetHostController,
+    onOpenFolder: (HomeItem) -> Unit,
+    onMoveItem: (HomeItem, Int, Int, Int) -> Unit,
+    onDropOnto: (HomeItem, HomeItem) -> Unit,
+    onToggleEditing: () -> Unit,
+    feedContent: @Composable () -> Unit,
+    workContent: @Composable () -> Unit,
     onLaunch: (AppEntry) -> Unit,
     onLongPress: (AppEntry) -> Unit,
     onSwipeUp: () -> Unit,
@@ -232,14 +320,23 @@ private fun HomeSurface(
                 layout = layout,
                 notifications = state.notifications,
                 density = state.spaceConfig.density,
+                widgetHost = widgetHost,
+                editing = editing,
                 onLaunch = onLaunchItem,
                 onLongPress = onItemLongPress,
+                onOpenFolder = onOpenFolder,
+                onMove = onMoveItem,
+                onDropOnto = onDropOnto,
                 contentPadding = contentPadding,
+                feedContent = feedContent,
+                workContent = workContent,
             )
         }
 
         SpaceBar(
             state = state,
+            editing = editing,
+            onToggleEditing = onToggleEditing,
             onSelectSpace = onSelectSpace,
             onOpenNotifications = onOpenNotifications,
             onOpenSettings = onOpenSettings,
@@ -271,6 +368,8 @@ private fun HomeSurface(
 @Composable
 private fun SpaceBar(
     state: LauncherUiState,
+    editing: Boolean,
+    onToggleEditing: () -> Unit,
     onSelectSpace: (SpaceId) -> Unit,
     onOpenNotifications: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -308,6 +407,12 @@ private fun SpaceBar(
             style = MaterialTheme.typography.labelSmall,
             color = if (unread > 0) tokens.accent else tokens.textMuted,
             modifier = Modifier.clickable(onClick = onOpenNotifications).padding(6.dp),
+        )
+        Text(
+            text = if (editing) "完成" else "編輯",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (editing) tokens.accent else tokens.textMuted,
+            modifier = Modifier.clickable(onClick = onToggleEditing).padding(6.dp),
         )
         Text(
             text = "設定",
@@ -375,3 +480,46 @@ private fun SpaceId.next(): SpaceId =
 
 private fun SpaceId.previous(): SpaceId =
     SpaceId.entries[(ordinal - 1 + SpaceId.entries.size) % SpaceId.entries.size]
+
+
+/**
+ * Reports what one-tap organise did, and offers the way back.
+ *
+ * The undo is the point. Rearranging someone's whole home screen is only
+ * acceptable if putting it back is one tap, and an undo the user has to go
+ * hunting for in settings is not one tap.
+ */
+@Composable
+private fun OrganiseToast(
+    message: String,
+    canUndo: Boolean,
+    onUndo: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = FoldSpaceTheme.tokens
+    FoldCard(modifier.fillMaxWidth()) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = tokens.textPrimary,
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            if (canUndo) {
+                Text(
+                    text = "還原",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tokens.accent,
+                    modifier = Modifier.clickable(onClick = onUndo).padding(4.dp),
+                )
+            }
+            Text(
+                text = "知道了",
+                style = MaterialTheme.typography.labelSmall,
+                color = tokens.textMuted,
+                modifier = Modifier.clickable(onClick = onDismiss).padding(4.dp),
+            )
+        }
+    }
+}

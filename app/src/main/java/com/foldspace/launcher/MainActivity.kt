@@ -76,6 +76,8 @@ class MainActivity : ComponentActivity() {
                     onOpenUsageSettings = ::openUsageAccessSettings,
                     onRequestDefaultHome = ::requestDefaultHome,
                     onExpandStatusBar = ::expandStatusBar,
+                    onOpenLink = ::openLink,
+                    onOpenPackage = ::openPackage,
                 )
             }
         }
@@ -84,9 +86,14 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.onResumed()
+        // §13 — widgets only refresh while the host listens, and the host only
+        // listens while the launcher is on screen. A backgrounded launcher
+        // taking widget updates is the standing cost §12 exists to avoid.
+        viewModel.widgetHost().startListening()
     }
 
     override fun onPause() {
+        viewModel.widgetHost().stopListening()
         // §8.2 — the moment we are no longer foreground, Nano becomes
         // ineligible. Reporting that here is what enforces it.
         viewModel.onPaused()
@@ -112,6 +119,26 @@ class MainActivity : ComponentActivity() {
             // §5.1 fallback for devices without the HOME role.
             startActivity(viewModel.homeSettingsIntent())
         }
+    }
+
+    /** Opens a feed story in whatever the user's browser is. */
+    private fun openLink(url: String) {
+        runCatching {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+
+    /**
+     * §6 — a work item leads back to the app that raised it. There is no
+     * public deep link into an Outlook message, so this opens the app itself
+     * rather than pretending to land on the item.
+     */
+    private fun openPackage(packageName: String) {
+        val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return
+        runCatching { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
 
     private fun openNotificationListenerSettings() {

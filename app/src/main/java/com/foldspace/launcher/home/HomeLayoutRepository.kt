@@ -4,6 +4,8 @@ import com.foldspace.launcher.core.launcher.AppEntry
 import com.foldspace.launcher.core.launcher.ProfileType
 import com.foldspace.launcher.home.db.HomeItemDao
 import com.foldspace.launcher.home.db.HomeItemEntity
+import com.foldspace.launcher.home.db.HomePageDao
+import com.foldspace.launcher.home.db.HomePageEntity
 import com.foldspace.launcher.spaces.SpaceId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -17,8 +19,19 @@ import kotlinx.coroutines.flow.map
  */
 class HomeLayoutRepository(
     private val dao: HomeItemDao,
+    private val pageDao: HomePageDao,
     private val installedApps: Flow<List<AppEntry>>,
 ) {
+
+    /**
+     * §redesign — one-tap organise must be undoable. A single-level in-memory
+     * snapshot is enough: the guarantee people need is "I can put it back",
+     * not a full history, and anything durable would have to survive a
+     * process death that also discards the intent to undo.
+     */
+    private var undoSnapshot: LayoutSnapshot? = null
+
+    val canUndo: Boolean get() = undoSnapshot != null
 
     /**
      * The layout as the UI consumes it: rows joined against the live installed
@@ -28,8 +41,9 @@ class HomeLayoutRepository(
     fun observe(space: SpaceId, posture: Posture): Flow<HomeLayout> =
         combine(
             dao.observeLayout(space.key, posture.key),
+            pageDao.observePages(space.key, posture.key),
             installedApps,
-        ) { rows, apps -> resolve(space, posture, rows, apps) }
+        ) { rows, pages, apps -> resolve(space, posture, rows, pages, apps) }
 
     /**
      * §5.2 — with no app drawer, every installed app has to be reachable from
@@ -128,6 +142,172 @@ class HomeLayoutRepository(
         )
     }
 
+    // ---- Editing (phase 3) ----
+
+    suspend fun moveItem(itemId: Long, pageIndex: Int, cellX: Int, cellY: Int) =
+        dao.moveToCell(itemId, pageIndex, cellX, cellY)
+
+    /**
+     * Dropping one app onto another makes a folder; dropping onto a folder
+     * adds to it. The new folder is named after the categoriser's guess when
+     * there is one, because an untitled folder is a folder the user has to
+     * name before it means anything.
+     */
+    suspend fun dropOnto(movingId: Long, targetId: Long, suggestedTitle: String) {
+        val target = dao.getById(targetId) ?: return
+        if (target.itemType == HomeItemType.Folder.key) {
+            dao.addToFolder(movingId, targetId)
+        } else {
+            dao.mergeIntoFolder(movingId, targetId, suggestedTitle)
+        }
+    }
+
+    suspend fun removeFromFolder(itemId: Long, pageIndex: Int, cellX: Int, cellY: Int) =
+        dao.removeFromFolder(itemId, pageIndex, cellX, cellY)
+
+    suspend fun renameFolder(folderId: Long, title: String) = dao.renameFolder(folderId, title)
+
+    suspend fun addPage(space: SpaceId, posture: Posture, kind: PageKind) {
+        val existing = pageDao.getPages(space.key, posture.key)
+        val items = dao.getLayout(space.key, posture.key)
+        val highest = maxOf(
+            existing.maxOfOrNull { it.pageIndex } ?: -1,
+            items.filter { it.container == HomeItemEntity.CONTAINER_DESKTOP }
+                .maxOfOrNull { it.pageIndex } ?: -1,
+        )
+        pageDao.upsert(
+            HomePageEntity(space.key, posture.key, highest + 1, kind.key),
+        )
+    }
+
+    suspend fun ensurePage(space: SpaceId, posture: Posture, pageIndex: Int, kind: PageKind) {
+        pageDao.upsert(HomePageEntity(space.key, posture.key, pageIndex, kind.key))
+    }
+
+    // ---- One-tap organise (phase 3) ----
+
+    /**
+     * Groups every placed app into category folders.
+     *
+     * Takes a snapshot first: rearranging someone's entire home screen with no
+     * way back is a hostile thing to do, however good the categories are.
+     */
+    suspend fun organiseIntoFolders(
+        space: SpaceId,
+        posture: Posture,
+        categories: Map<String, AppCategory>,
+    ): OrganiseOutcome {
+        val before = dao.getLayout(space.key, posture.key)
+        val apps = before.filter {
+            it.itemType == HomeItemType.App.key && it.packageName != null
+        }
+        if (apps.isEmpty()) return OrganiseOutcome(0, 0)
+
+        undoSnapshot = LayoutSnapshot(space, posture, before)
+
+        val grid = GridSpec.of(space, posture)
+        val grouped = apps.groupBy { categories[it.packageName] ?: AppCategory.Other }
+            .toList()
+            .sortedBy { (category, _) -> category.ordinal }
+
+        // Built as an explicit plan rather than a flat list with placeholder
+        // ids: folder membership is a parent/child relationship, and encoding
+        // it as "the nth folder owns the nth distinct placeholder" is the kind
+        // of positional coupling that breaks the first time the order changes.
+        val plan = mutableListOf<PlannedSlot>()
+        var slot = 0
+        var folderCount = 0
+
+        fun slotOf(index: Int) = Triple(
+            index / grid.cellsPerPage,
+            (index % grid.cellsPerPage) % grid.columns,
+            (index % grid.cellsPerPage) / grid.columns,
+        )
+
+        for ((category, members) in grouped) {
+            // A folder holding one app is worse than the app itself: an extra
+            // tap for no organisation. Those stay loose on the grid.
+            if (members.size <= 1) {
+                members.forEach { member ->
+                    val (page, x, y) = slotOf(slot++)
+                    plan += PlannedSlot.Loose(
+                        member.copy(
+                            id = 0,
+                            container = HomeItemEntity.CONTAINER_DESKTOP,
+                            pageIndex = page,
+                            cellX = x,
+                            cellY = y,
+                            sortOrder = 0,
+                        ),
+                    )
+                }
+                continue
+            }
+
+            val (page, x, y) = slotOf(slot++)
+            folderCount++
+            plan += PlannedSlot.Folder(
+                folder = HomeItemEntity(
+                    id = 0,
+                    spaceKey = space.key,
+                    postureKey = posture.key,
+                    container = HomeItemEntity.CONTAINER_DESKTOP,
+                    pageIndex = page,
+                    cellX = x,
+                    cellY = y,
+                    itemType = HomeItemType.Folder.key,
+                    folderTitle = category.displayName,
+                ),
+                members = members.mapIndexed { index, member ->
+                    member.copy(
+                        id = 0,
+                        pageIndex = HomeItemDao.PARK_PAGE,
+                        cellX = index,
+                        cellY = 0,
+                        sortOrder = index,
+                    )
+                },
+            )
+        }
+
+        writePlan(space, posture, plan)
+        return OrganiseOutcome(foldersCreated = folderCount, appsPlaced = apps.size)
+    }
+
+    /**
+     * Writes the plan, resolving each folder's real id before its members are
+     * inserted. Members carry no container until this point, so there is no
+     * window in which a member points at an id that does not exist.
+     */
+    private suspend fun writePlan(
+        space: SpaceId,
+        posture: Posture,
+        plan: List<PlannedSlot>,
+    ) {
+        dao.clearLayout(space.key, posture.key)
+        for (entry in plan) {
+            when (entry) {
+                is PlannedSlot.Loose -> dao.insert(entry.item)
+                is PlannedSlot.Folder -> {
+                    val folderId = dao.insert(entry.folder)
+                    dao.insertAll(entry.members.map { it.copy(container = folderId) })
+                }
+            }
+        }
+    }
+
+    /** Puts the layout back exactly as it was before the last organise. */
+    suspend fun undoOrganise(): Boolean {
+        val snapshot = undoSnapshot ?: return false
+        dao.replaceLayout(
+            snapshot.space.key,
+            snapshot.posture.key,
+            snapshot.rows.map { it.copy(id = 0) },
+        )
+        undoSnapshot = null
+        return true
+    }
+
     /** First index not already occupied, scanning pages in reading order. */
     private fun nextFreeSlot(existing: List<HomeItemEntity>, grid: GridSpec): Int {
         val taken = existing
@@ -159,6 +339,7 @@ class HomeLayoutRepository(
         space: SpaceId,
         posture: Posture,
         rows: List<HomeItemEntity>,
+        pageRows: List<HomePageEntity>,
         apps: List<AppEntry>,
     ): HomeLayout {
         val grid = GridSpec.of(space, posture)
@@ -196,11 +377,42 @@ class HomeLayoutRepository(
             )
         }
 
-        val pages = desktop
-            .groupBy { it.pageIndex }
-            .toSortedMap()
-            .map { (index, items) -> HomePage(index, items.map(::toItem)) }
+        val kinds = pageRows.associate { it.pageIndex to PageKind.fromKey(it.kind) }
+        val itemsByPage = desktop.groupBy { it.pageIndex }
+
+        // A page exists if it holds something or if it was explicitly declared
+        // — a declared-but-empty widget or feed page must not disappear.
+        val indices = (itemsByPage.keys + kinds.keys).sorted()
+
+        val pages = indices.map { index ->
+            HomePage(
+                index = index,
+                items = itemsByPage[index].orEmpty().map(::toItem),
+                kind = kinds[index] ?: PageKind.Grid,
+            )
+        }
 
         return HomeLayout(space = space, posture = posture, grid = grid, pages = pages)
     }
+}
+
+
+/** What one organise pass did, so the UI can say it rather than just redraw. */
+data class OrganiseOutcome(val foldersCreated: Int, val appsPlaced: Int)
+
+/** A single-level undo point for [HomeLayoutRepository.organiseIntoFolders]. */
+private data class LayoutSnapshot(
+    val space: SpaceId,
+    val posture: Posture,
+    val rows: List<HomeItemEntity>,
+)
+
+/** One entry in a planned layout, before any database ids exist. */
+private sealed interface PlannedSlot {
+    data class Loose(val item: HomeItemEntity) : PlannedSlot
+
+    data class Folder(
+        val folder: HomeItemEntity,
+        val members: List<HomeItemEntity>,
+    ) : PlannedSlot
 }

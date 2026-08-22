@@ -12,9 +12,13 @@ import com.foldspace.launcher.context.signals.PowerSignalSource
 import com.foldspace.launcher.context.signals.UsageSignalSource
 import com.foldspace.launcher.core.launcher.AppEntry
 import com.foldspace.launcher.core.launcher.ProfileType
+import com.foldspace.launcher.feed.FeedState
 import com.foldspace.launcher.home.HomeItem
 import com.foldspace.launcher.home.HomeLayout
+import com.foldspace.launcher.home.PageKind
 import com.foldspace.launcher.home.Posture
+import com.foldspace.launcher.work.WorkItemsDeriver
+import com.foldspace.launcher.work.WorkItemsState
 import com.foldspace.launcher.notifications.FoldSpaceNotificationListener
 import com.foldspace.launcher.notifications.NotificationRepository
 import com.foldspace.launcher.notifications.NotificationSummary
@@ -172,6 +176,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 HomeLayout.empty(SpaceId.General, Posture.Folded),
             )
 
+    // ---- Editing (phase 3) ----
+
+    private val _editing = MutableStateFlow(false)
+    val editing: StateFlow<Boolean> = _editing.asStateFlow()
+
+    private val _openFolderId = MutableStateFlow<Long?>(null)
+    val openFolderId: StateFlow<Long?> = _openFolderId.asStateFlow()
+
+    private val _organiseMessage = MutableStateFlow<String?>(null)
+    val organiseMessage: StateFlow<String?> = _organiseMessage.asStateFlow()
+
+    val feedState: StateFlow<FeedState> = container.feed.state
+
+    /** §6 — work items derived from notifications, never from a mailbox. */
+    val workItems: StateFlow<WorkItemsState> = NotificationRepository.summary
+        .map(WorkItemsDeriver::derive)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WorkItemsState())
+
     private val _drawerOpen = MutableStateFlow(false)
     val drawerOpen: StateFlow<Boolean> = _drawerOpen.asStateFlow()
 
@@ -207,6 +229,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     }
                     container.homeLayout.syncInstalled(apps)
                 }
+        }
+        viewModelScope.launch {
+            // The leftmost feed page and 工作's work page are declared once so
+            // they exist even while empty — an undeclared empty page is
+            // indistinguishable from no page at all.
+            container.settings.currentSpace.collect { space ->
+                for (posture in Posture.entries) {
+                    when (space) {
+                        SpaceId.General ->
+                            container.homeLayout.ensurePage(space, posture, FEED_PAGE_INDEX, PageKind.Feed)
+
+                        SpaceId.Work ->
+                            container.homeLayout.ensurePage(space, posture, FEED_PAGE_INDEX, PageKind.Work)
+
+                        SpaceId.Simple -> Unit
+                    }
+                }
+            }
         }
         viewModelScope.launch {
             // The unfolded arrangement is created from the folded one the
@@ -295,6 +335,108 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         container.homeLayout.setSimpleApps(apps)
     }
 
+    // ---- Editing ----
+
+    fun setEditing(value: Boolean) {
+        _editing.value = value
+        if (!value) _openFolderId.value = null
+    }
+
+    fun openFolder(item: HomeItem) {
+        _openFolderId.value = item.id
+    }
+
+    fun closeFolder() {
+        _openFolderId.value = null
+    }
+
+    fun moveItem(item: HomeItem, page: Int, cellX: Int, cellY: Int) = viewModelScope.launch {
+        container.homeLayout.moveItem(item.id, page, cellX, cellY)
+    }
+
+    fun dropOnto(moving: HomeItem, target: HomeItem) = viewModelScope.launch {
+        // A folder made from two apps is named after whatever the categoriser
+        // would have called them, so it means something before the user
+        // renames it.
+        val suggested = moving.app?.let { app ->
+            container.categorizer.categorise(listOf(app)).categorised[app.packageName]
+        }?.displayName ?: "資料夾"
+        container.homeLayout.dropOnto(moving.id, target.id, suggested)
+    }
+
+    fun removeFromFolder(item: HomeItem) = viewModelScope.launch {
+        val layout = homeLayout.value
+        val free = layout.firstFreeCellAnywhere() ?: return@launch
+        container.homeLayout.removeFromFolder(item.id, free.first, free.second, free.third)
+    }
+
+    fun renameOpenFolder(title: String) = viewModelScope.launch {
+        val id = _openFolderId.value ?: return@launch
+        container.homeLayout.renameFolder(id, title)
+    }
+
+    // ---- One-tap organise ----
+
+    /**
+     * §redesign — categorise, then rebuild the layout into folders. The
+     * outcome is reported rather than left for the user to infer from a
+     * screen that suddenly looks different.
+     */
+    fun organiseApps() = viewModelScope.launch {
+        val apps = container.launcherApps.apps.value
+        if (apps.isEmpty()) return@launch
+
+        val result = container.categorizer.categorise(apps)
+        // §8.1 — Nano would resolve the leftovers here. With no model on this
+        // build they land in 其他, which is honest rather than a guess.
+        val categories = result.categorised + container.categorizer.fallbackForUnknown(result.unknown)
+
+        val outcome = container.homeLayout.organiseIntoFolders(
+            space = state.value.space,
+            posture = if (state.value.window.layoutMode == LayoutMode.Compact) {
+                Posture.Folded
+            } else {
+                Posture.Unfolded
+            },
+            categories = categories,
+        )
+
+        _organiseMessage.value = if (result.unknown.isEmpty()) {
+            "已整理 ${outcome.appsPlaced} 個 App 成 ${outcome.foldersCreated} 個資料夾"
+        } else {
+            "已整理 ${outcome.appsPlaced} 個 App 成 ${outcome.foldersCreated} 個資料夾" +
+                "（${result.unknown.size} 個無法判斷，放入「其他」）"
+        }
+    }
+
+    val canUndoOrganise: Boolean get() = container.homeLayout.canUndo
+
+    fun undoOrganise() = viewModelScope.launch {
+        if (container.homeLayout.undoOrganise()) {
+            _organiseMessage.value = "已還原先前的排列"
+        }
+    }
+
+    fun dismissOrganiseMessage() {
+        _organiseMessage.value = null
+    }
+
+    // ---- Pages ----
+
+    fun addWidgetPage() = viewModelScope.launch {
+        container.homeLayout.addPage(state.value.space, currentPosture(), PageKind.Widgets)
+    }
+
+    fun refreshFeed(force: Boolean = false) = viewModelScope.launch {
+        container.feed.refreshIfStale(force)
+    }
+
+    /** §13 — the host only listens while the launcher is actually on screen. */
+    fun widgetHost() = container.widgetHost
+
+    private fun currentPosture(): Posture =
+        if (state.value.window.layoutMode == LayoutMode.Compact) Posture.Folded else Posture.Unfolded
+
     fun openAppInfo(entry: AppEntry) {
         if (!container.launcherApps.openAppInfo(entry)) {
             container.launcherApps.openSystemAppSettings(entry.packageName)
@@ -353,5 +495,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private companion object {
         /** §5.4 — "使用者可固定 2–3 個 App"; four is the hard ceiling. */
         const val MAX_PINNED = 4
+
+        /**
+         * The feed and work pages live at index 0 so they are the page to the
+         * *left* of the apps, which is where the request put them.
+         */
+        const val FEED_PAGE_INDEX = 0
     }
 }

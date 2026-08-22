@@ -49,6 +49,8 @@ fun SettingsScreen(
     onRequestDefaultHome: () -> Unit,
     onRequestNotificationAccess: () -> Unit,
     onRequestUsageAccess: () -> Unit,
+    onOrganiseApps: () -> Unit,
+    onAddWidgetPage: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
@@ -116,6 +118,38 @@ fun SettingsScreen(
                 actionLabel = if (state.hasUsageAccess) "已授權" else "前往系統設定",
                 onAction = onRequestUsageAccess,
             )
+        }
+
+        // Home-screen actions.
+        item {
+            FoldCard(Modifier.fillMaxWidth()) {
+                Text(
+                    text = "整理桌面",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.textPrimary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "把所有 App 依類別收進資料夾。分類來源是系統類別與內建對照表；" +
+                        "判斷不出來的會放進「其他」。整理後可以一鍵還原。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                )
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    text = "一鍵整理分類",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tokens.accent,
+                    modifier = Modifier.clickable(onClick = onOrganiseApps).padding(vertical = 4.dp),
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "新增小工具頁",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tokens.accent,
+                    modifier = Modifier.clickable(onClick = onAddWidgetPage).padding(vertical = 4.dp),
+                )
+            }
         }
 
         // §6.1 Samsung Compatibility Mode.

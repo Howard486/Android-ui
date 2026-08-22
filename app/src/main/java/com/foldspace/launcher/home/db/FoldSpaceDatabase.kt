@@ -6,13 +6,15 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [HomeItemEntity::class],
-    version = 1,
+    entities = [HomeItemEntity::class, HomePageEntity::class],
+    version = 2,
     exportSchema = false,
 )
 abstract class FoldSpaceDatabase : RoomDatabase() {
 
     abstract fun homeItemDao(): HomeItemDao
+
+    abstract fun homePageDao(): HomePageDao
 
     companion object {
         @Volatile

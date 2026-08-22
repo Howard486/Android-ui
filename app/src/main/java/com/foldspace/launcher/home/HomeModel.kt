@@ -54,6 +54,35 @@ data class GridSpec(val columns: Int, val rows: Int) {
     }
 }
 
+/**
+ * What a page is for.
+ *
+ * Only non-grid pages need to be recorded; a grid page is implied by the items
+ * sitting on it. Without this an empty widget page would be indistinguishable
+ * from a page that does not exist.
+ */
+enum class PageKind(val key: String) {
+    /** Apps, folders and widgets on the fixed grid. */
+    Grid("grid"),
+
+    /** The leftmost feed page (§ redesign doc). */
+    Feed("feed"),
+
+    /** A page the user reserved for widgets. Widgets are allowed anywhere;
+     *  this one just starts empty and is labelled. */
+    Widgets("widgets"),
+
+    /** 工作 mode's notification-derived work items. */
+    Work("work"),
+    ;
+
+    val isGrid: Boolean get() = this == Grid
+
+    companion object {
+        fun fromKey(key: String?): PageKind = entries.firstOrNull { it.key == key } ?: Grid
+    }
+}
+
 /** What a cell holds. */
 enum class HomeItemType(val key: String) {
     App("app"),
@@ -101,6 +130,7 @@ data class HomeItem(
 data class HomePage(
     val index: Int,
     val items: List<HomeItem>,
+    val kind: PageKind = PageKind.Grid,
 )
 
 /** The whole arrangement for one Space in one posture. */
@@ -111,6 +141,30 @@ data class HomeLayout(
     val pages: List<HomePage>,
 ) {
     val isEmpty: Boolean get() = pages.all { it.items.isEmpty() }
+
+    fun pageAt(index: Int): HomePage? = pages.getOrNull(index)
+
+    /** First free cell on the given page, or null when the page is full. */
+    fun firstFreeCell(pageIndex: Int): Pair<Int, Int>? {
+        val taken = pages.firstOrNull { it.index == pageIndex }
+            ?.items
+            ?.mapTo(mutableSetOf()) { it.cellX to it.cellY }
+            .orEmpty()
+        for (y in 0 until grid.rows) {
+            for (x in 0 until grid.columns) {
+                if ((x to y) !in taken) return x to y
+            }
+        }
+        return null
+    }
+
+    /** First free cell anywhere, scanning pages in order. */
+    fun firstFreeCellAnywhere(): Triple<Int, Int, Int>? {
+        for (page in pages) {
+            firstFreeCell(page.index)?.let { (x, y) -> return Triple(page.index, x, y) }
+        }
+        return null
+    }
 
     companion object {
         fun empty(space: SpaceId, posture: Posture) = HomeLayout(

@@ -8,8 +8,14 @@ import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * Declared as an abstract class rather than an interface: Room's handling of
+ * suspend `@Transaction` default methods is well-trodden on abstract classes
+ * and has historically been fussy on interfaces, and the multi-step swaps
+ * below are exactly the case that needs them.
+ */
 @Dao
-interface HomeItemDao {
+abstract class HomeItemDao {
 
     @Query(
         """
@@ -18,7 +24,7 @@ interface HomeItemDao {
         ORDER BY pageIndex, cellY, cellX, sortOrder
         """,
     )
-    fun observeLayout(spaceKey: String, postureKey: String): Flow<List<HomeItemEntity>>
+    abstract fun observeLayout(spaceKey: String, postureKey: String): Flow<List<HomeItemEntity>>
 
     @Query(
         """
@@ -27,42 +33,226 @@ interface HomeItemDao {
         ORDER BY pageIndex, cellY, cellX, sortOrder
         """,
     )
-    suspend fun getLayout(spaceKey: String, postureKey: String): List<HomeItemEntity>
+    abstract suspend fun getLayout(spaceKey: String, postureKey: String): List<HomeItemEntity>
 
     @Query(
         "SELECT COUNT(*) FROM home_items WHERE spaceKey = :spaceKey AND postureKey = :postureKey",
     )
-    suspend fun countIn(spaceKey: String, postureKey: String): Int
+    abstract suspend fun countIn(spaceKey: String, postureKey: String): Int
 
-    /** Every app component currently placed anywhere, for install/remove sync. */
+    @Query("SELECT * FROM home_items WHERE id = :id")
+    abstract suspend fun getById(id: Long): HomeItemEntity?
+
+    @Query(
+        """
+        SELECT * FROM home_items
+        WHERE spaceKey = :spaceKey AND postureKey = :postureKey
+          AND container = -1 AND pageIndex = :pageIndex
+          AND cellX = :cellX AND cellY = :cellY
+        LIMIT 1
+        """,
+    )
+    abstract suspend fun itemAt(
+        spaceKey: String,
+        postureKey: String,
+        pageIndex: Int,
+        cellX: Int,
+        cellY: Int,
+    ): HomeItemEntity?
+
+    @Query("SELECT * FROM home_items WHERE container = :folderId ORDER BY sortOrder")
+    abstract suspend fun folderMembers(folderId: Long): List<HomeItemEntity>
+
+    /** Every app package currently placed anywhere, for install/remove sync. */
     @Query("SELECT DISTINCT packageName FROM home_items WHERE itemType = 'app' AND packageName IS NOT NULL")
-    suspend fun placedPackages(): List<String>
+    abstract suspend fun placedPackages(): List<String>
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
-    suspend fun insert(item: HomeItemEntity): Long
+    abstract suspend fun insert(item: HomeItemEntity): Long
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
-    suspend fun insertAll(items: List<HomeItemEntity>): List<Long>
+    abstract suspend fun insertAll(items: List<HomeItemEntity>): List<Long>
 
     @Update
-    suspend fun update(item: HomeItemEntity)
+    abstract suspend fun update(item: HomeItemEntity)
 
     @Query("DELETE FROM home_items WHERE id = :id")
-    suspend fun deleteById(id: Long)
+    abstract suspend fun deleteById(id: Long)
 
     /**
      * Removing an app removes it wherever it sits, in every Space and both
      * postures — an uninstalled app has no business keeping a cell.
      */
     @Query("DELETE FROM home_items WHERE itemType = 'app' AND packageName = :packageName")
-    suspend fun deleteByPackage(packageName: String)
+    abstract suspend fun deleteByPackage(packageName: String)
 
     @Query("DELETE FROM home_items WHERE spaceKey = :spaceKey AND postureKey = :postureKey")
-    suspend fun clearLayout(spaceKey: String, postureKey: String)
+    abstract suspend fun clearLayout(spaceKey: String, postureKey: String)
 
     @Transaction
-    suspend fun replaceLayout(spaceKey: String, postureKey: String, items: List<HomeItemEntity>) {
+    open suspend fun replaceLayout(spaceKey: String, postureKey: String, items: List<HomeItemEntity>) {
         clearLayout(spaceKey, postureKey)
         insertAll(items)
+    }
+
+    /**
+     * Moves an item to a cell, swapping with whatever is already there.
+     *
+     * The unique index on (space, posture, container, page, x, y) makes a naive
+     * two-step swap fail halfway, so the moving row is parked on a sentinel
+     * cell first. The whole thing is one transaction — a swap that got half way
+     * would leave two icons stacked, which is precisely what that index exists
+     * to prevent.
+     */
+    @Transaction
+    open suspend fun moveToCell(id: Long, pageIndex: Int, cellX: Int, cellY: Int) {
+        val moving = getById(id) ?: return
+        if (moving.container == HomeItemEntity.CONTAINER_DESKTOP &&
+            moving.pageIndex == pageIndex && moving.cellX == cellX && moving.cellY == cellY
+        ) {
+            return
+        }
+
+        val occupant = itemAt(moving.spaceKey, moving.postureKey, pageIndex, cellX, cellY)
+
+        update(moving.copy(pageIndex = PARK_PAGE, cellX = PARK_CELL, cellY = PARK_CELL))
+
+        if (occupant != null && occupant.id != moving.id) {
+            // A swap only makes sense from a desktop cell. An item dragged out
+            // of a folder has no cell to give back, so the occupant stays put
+            // and the caller is expected to have picked a free cell.
+            if (moving.container == HomeItemEntity.CONTAINER_DESKTOP) {
+                update(
+                    occupant.copy(
+                        pageIndex = moving.pageIndex,
+                        cellX = moving.cellX,
+                        cellY = moving.cellY,
+                    ),
+                )
+            } else {
+                return
+            }
+        }
+
+        update(
+            moving.copy(
+                container = HomeItemEntity.CONTAINER_DESKTOP,
+                pageIndex = pageIndex,
+                cellX = cellX,
+                cellY = cellY,
+                sortOrder = 0,
+            ),
+        )
+    }
+
+    /**
+     * Turns two apps that met on one cell into a folder holding both. The
+     * folder takes the target's cell, which is where the user dropped.
+     */
+    @Transaction
+    open suspend fun mergeIntoFolder(movingId: Long, targetId: Long, title: String): Long {
+        val moving = getById(movingId) ?: return -1L
+        val target = getById(targetId) ?: return -1L
+        if (moving.id == target.id) return -1L
+
+        val folderId = insert(
+            HomeItemEntity(
+                spaceKey = target.spaceKey,
+                postureKey = target.postureKey,
+                pageIndex = PARK_PAGE,
+                cellX = PARK_CELL,
+                cellY = PARK_CELL,
+                itemType = "folder",
+                folderTitle = title,
+            ),
+        )
+
+        // The unique index covers `container` too, so members of one folder
+        // must not all share a cell — their slot number doubles as cellX.
+        update(target.copy(container = folderId).atFolderSlot(0))
+        update(moving.copy(container = folderId).atFolderSlot(1))
+
+        getById(folderId)?.let {
+            update(it.copy(pageIndex = target.pageIndex, cellX = target.cellX, cellY = target.cellY))
+        }
+        return folderId
+    }
+
+    @Transaction
+    open suspend fun addToFolder(itemId: Long, folderId: Long) {
+        val item = getById(itemId) ?: return
+        if (item.id == folderId) return
+        val nextOrder = folderMembers(folderId).size
+        update(item.copy(container = folderId).atFolderSlot(nextOrder))
+    }
+
+    /**
+     * Pulls an item back out onto a cell. A folder left holding one app is
+     * dissolved: a one-app folder is pure overhead, two taps where one would
+     * do.
+     */
+    @Transaction
+    open suspend fun removeFromFolder(itemId: Long, pageIndex: Int, cellX: Int, cellY: Int) {
+        val item = getById(itemId) ?: return
+        val folderId = item.container
+        if (folderId == HomeItemEntity.CONTAINER_DESKTOP) return
+
+        update(
+            item.copy(
+                container = HomeItemEntity.CONTAINER_DESKTOP,
+                pageIndex = pageIndex,
+                cellX = cellX,
+                cellY = cellY,
+                sortOrder = 0,
+            ),
+        )
+
+        val remaining = folderMembers(folderId)
+        if (remaining.size > 1) {
+            // Close the gap the departing member left, or the next addToFolder
+            // computes a slot that is already taken.
+            remaining.forEachIndexed { index, member -> update(member.atFolderSlot(index)) }
+            return
+        }
+
+        val folder = getById(folderId) ?: return
+        val survivor = remaining.firstOrNull()
+        update(folder.copy(pageIndex = PARK_PAGE, cellX = PARK_CELL, cellY = PARK_CELL))
+        if (survivor != null) {
+            update(
+                survivor.copy(
+                    container = HomeItemEntity.CONTAINER_DESKTOP,
+                    pageIndex = folder.pageIndex,
+                    cellX = folder.cellX,
+                    cellY = folder.cellY,
+                    sortOrder = 0,
+                ),
+            )
+        }
+        deleteById(folderId)
+    }
+
+    @Query("UPDATE home_items SET folderTitle = :title WHERE id = :folderId")
+    abstract suspend fun renameFolder(folderId: Long, title: String)
+
+    /**
+     * Positions a folder member. Members live off-page, and their slot number
+     * is stored in cellX so that the unique index — which includes `container`
+     * — still distinguishes them from each other.
+     */
+    private fun HomeItemEntity.atFolderSlot(slot: Int) = copy(
+        pageIndex = PARK_PAGE,
+        cellX = slot,
+        cellY = 0,
+        sortOrder = slot,
+    )
+
+    companion object {
+        /**
+         * A page no real page can be, used both to park a row mid-swap and to
+         * hold folder members, without tripping the unique index.
+         */
+        const val PARK_PAGE = -99
+        const val PARK_CELL = -99
     }
 }

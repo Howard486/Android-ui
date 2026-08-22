@@ -7,8 +7,13 @@ import com.foldspace.launcher.context.ContextEngine
 import com.foldspace.launcher.context.RuleEngine
 import com.foldspace.launcher.core.launcher.HomeRoleManager
 import com.foldspace.launcher.core.launcher.LauncherAppsRepository
+import com.foldspace.launcher.feed.FeedRepository
+import com.foldspace.launcher.feed.GoogleNewsRssProvider
+import com.foldspace.launcher.feed.GoogleOverlayFeedProvider
+import com.foldspace.launcher.home.AppCategorizer
 import com.foldspace.launcher.home.HomeLayoutRepository
 import com.foldspace.launcher.home.db.FoldSpaceDatabase
+import com.foldspace.launcher.widgets.WidgetHostController
 import com.foldspace.launcher.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,7 +54,24 @@ class AppContainer(context: Context) {
     /** The home-screen arrangement: pages, cells, folders, widget bindings. */
     val homeLayout = HomeLayoutRepository(
         dao = database.homeItemDao(),
+        pageDao = database.homePageDao(),
         installedApps = launcherApps.apps,
+    )
+
+    val categorizer = AppCategorizer(context)
+
+    /** §13 — third-party App Widget hosting. */
+    val widgetHost = WidgetHostController(context)
+
+    /**
+     * The leftmost page. Google's overlay is asked first and expected to
+     * decline; the RSS provider is what actually serves.
+     */
+    val feed = FeedRepository(
+        providers = listOf(
+            GoogleOverlayFeedProvider(context),
+            GoogleNewsRssProvider(),
+        ),
     )
 
     /**
