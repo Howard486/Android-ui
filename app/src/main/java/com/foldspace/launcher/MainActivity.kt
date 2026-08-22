@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
                 tracker.states().collect(viewModel::onWindowStateChanged)
             }
 
-            val tokens = Themes.of(state.settings.themeId)
+            val tokens = Themes.of(state.activeTheme)
             FoldSpaceTheme(
                 tokens = tokens,
                 motionLevel = effectiveMotion(

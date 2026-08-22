@@ -71,15 +71,19 @@ third is a different *kind* of thing from the other two:
 
 | Space | Density | Notifications | Theme | Switched by |
 |---|---|---|---|---|
-| **通用** | Standard — 4 cols, 52dp icons | Info and above | Minimal | context or user |
-| **工作** | Standard — 4 cols, 52dp icons | Info and above | Executive | context or user |
-| **簡易** | Simplified — 3 cols, 72dp icons, labels always on, 3 dock slots | Action and above | True Black | **user only** |
+| **通用** | Standard — 4 cols, 52dp icons | Info and above | user's choice | context or user |
+| **工作** | Standard — 4 cols, 52dp icons | Info and above | user's choice | context or user |
+| **簡易** | Simplified — 3 cols, 72dp icons, labels always on, 3 dock slots | Action and above | True Black (pinned) | **user only** |
 
 簡易 is a real simplified mode, not a renamed label: `SpaceDensity` drives icon
 size, column count, dock slot count, drawer cell width and label visibility
 through the folded, unfolded, tabletop and book layouts alike. True Black is
 its theme because it is the highest-contrast preset and its motion level is
 already `None`.
+
+簡易 is the only Space that pins a theme. 通用 and 工作 leave `themeId` null
+and follow whatever the user picked in Settings — overriding that on every
+Space switch would make the theme picker look broken.
 
 **The Context Engine may never select 簡易.** `SpaceId.isUserSelectableOnly`
 gates it out of the scoring pass, and `ContextEngine` rejects a Nano result

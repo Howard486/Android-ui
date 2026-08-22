@@ -108,7 +108,15 @@ data class SpaceConfig(
     val smartDockSlots: Int,
     val cards: List<CardId>,
     val notificationPolicy: NotificationPolicy,
-    val themeId: String,
+    /**
+     * Theme this Space forces, or null to follow the user's own choice.
+     *
+     * 通用 and 工作 deliberately do not pin one: overriding the theme the user
+     * picked in Settings every time they switch Space would make the theme
+     * picker look broken. 簡易 pins True Black because the contrast is part of
+     * what makes it simplified, not decoration.
+     */
+    val themeId: String?,
     val density: SpaceDensity,
 ) {
     companion object {
@@ -124,7 +132,7 @@ data class SpaceConfig(
                 smartDockSlots = 4,
                 cards = listOf(CardId.Clock, CardId.Weather, CardId.Notifications),
                 notificationPolicy = NotificationPolicy.Default,
-                themeId = "minimal",
+                themeId = null,
                 density = SpaceDensity.Standard,
             )
 
@@ -134,7 +142,7 @@ data class SpaceConfig(
                 smartDockSlots = 4,
                 cards = listOf(CardId.Calendar, CardId.Tasks, CardId.Notifications, CardId.Clock),
                 notificationPolicy = NotificationPolicy.Default,
-                themeId = "executive",
+                themeId = null,
                 density = SpaceDensity.Standard,
             )
 

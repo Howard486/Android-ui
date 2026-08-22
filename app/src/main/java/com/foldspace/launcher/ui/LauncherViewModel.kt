@@ -55,7 +55,14 @@ data class LauncherUiState(
 
     val spaceConfig: SpaceConfig get() = SpaceConfig.default(space)
 
-    val tokens: ThemeTokens get() = Themes.of(settings.themeId)
+    /**
+     * §3/§15 — a Space may pin a theme; otherwise the user's own choice wins.
+     * Today only 簡易 pins one.
+     */
+    val activeTheme: ThemeId
+        get() = spaceConfig.themeId?.let(ThemeId::fromKey) ?: settings.themeId
+
+    val tokens: ThemeTokens get() = Themes.of(activeTheme)
 
     val motion: MotionLevel
         get() = effectiveMotion(tokens, settings.powerMode, powerSaveActive)

@@ -37,7 +37,7 @@ enum class ThemeId(val key: String, val displayName: String) {
 
 /** Everything the user can change. One object so the UI observes a single flow. */
 data class FoldSpaceSettings(
-    val currentSpace: SpaceId = SpaceId.Home,
+    val currentSpace: SpaceId = SpaceId.General,
     val switchMode: SwitchMode = SwitchMode.SuggestFirst,
     val powerMode: PowerMode = PowerMode.Smart,
     val themeId: ThemeId = ThemeId.Minimal,
