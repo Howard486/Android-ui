@@ -138,7 +138,18 @@ data class HomeLayout(
     val space: SpaceId,
     val posture: Posture,
     val grid: GridSpec,
+    /** Grid pages only, numbered from 0. */
     val pages: List<HomePage>,
+    /**
+     * The page shown to the left of the grid, if any.
+     *
+     * Deliberately *not* a stored page at index 0. It was, and that put the
+     * feed on the same index the app placer starts from, so every app on the
+     * first page was drawn as the feed page and vanished. Keeping it out of
+     * the index space makes that collision impossible rather than merely
+     * avoided.
+     */
+    val leading: PageKind? = null,
 ) {
     val isEmpty: Boolean get() = pages.all { it.items.isEmpty() }
 
@@ -158,12 +169,17 @@ data class HomeLayout(
         return null
     }
 
-    /** First free cell anywhere, scanning pages in order. */
-    fun firstFreeCellAnywhere(): Triple<Int, Int, Int>? {
+    /**
+     * First free cell anywhere, scanning pages in order. Falls back to the
+     * first cell of a new page rather than null: the callers use this to put
+     * something down, and "nowhere to put it" would mean losing the item.
+     */
+    fun firstFreeCellAnywhere(): Triple<Int, Int, Int> {
         for (page in pages) {
             firstFreeCell(page.index)?.let { (x, y) -> return Triple(page.index, x, y) }
         }
-        return null
+        val nextPage = (pages.maxOfOrNull { it.index } ?: -1) + 1
+        return Triple(nextPage, 0, 0)
     }
 
     companion object {
@@ -172,6 +188,14 @@ data class HomeLayout(
             posture = posture,
             grid = GridSpec.of(space, posture),
             pages = emptyList(),
+            leading = leadingFor(space),
         )
+
+        /** 通用 gets the news page, 工作 gets work items, 簡易 gets neither. */
+        fun leadingFor(space: SpaceId): PageKind? = when (space) {
+            SpaceId.General -> PageKind.Feed
+            SpaceId.Work -> PageKind.Work
+            SpaceId.Simple -> null
+        }
     }
 }

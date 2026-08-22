@@ -167,6 +167,37 @@ class HomeLayoutRepository(
 
     suspend fun renameFolder(folderId: Long, title: String) = dao.renameFolder(folderId, title)
 
+    /** §13 — records a bound widget at a cell. */
+    suspend fun addWidget(
+        space: SpaceId,
+        posture: Posture,
+        pageIndex: Int,
+        cellX: Int,
+        cellY: Int,
+        appWidgetId: Int,
+        provider: String?,
+        spanX: Int,
+        spanY: Int,
+    ) {
+        val grid = GridSpec.of(space, posture)
+        dao.insert(
+            HomeItemEntity(
+                spaceKey = space.key,
+                postureKey = posture.key,
+                pageIndex = pageIndex,
+                cellX = cellX,
+                cellY = cellY,
+                spanX = spanX.coerceIn(1, grid.columns),
+                spanY = spanY.coerceIn(1, grid.rows),
+                itemType = HomeItemType.Widget.key,
+                appWidgetId = appWidgetId,
+                widgetProvider = provider,
+            ),
+        )
+    }
+
+    suspend fun removeItem(itemId: Long) = dao.deleteById(itemId)
+
     suspend fun addPage(space: SpaceId, posture: Posture, kind: PageKind) {
         val existing = pageDao.getPages(space.key, posture.key)
         val items = dao.getLayout(space.key, posture.key)
@@ -392,7 +423,13 @@ class HomeLayoutRepository(
             )
         }
 
-        return HomeLayout(space = space, posture = posture, grid = grid, pages = pages)
+        return HomeLayout(
+            space = space,
+            posture = posture,
+            grid = grid,
+            pages = pages,
+            leading = HomeLayout.leadingFor(space),
+        )
     }
 }
 

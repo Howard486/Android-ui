@@ -1,6 +1,7 @@
 package com.foldspace.launcher.ui
 
 import android.app.Application
+import android.appwidget.AppWidgetProviderInfo
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.foldspace.launcher.AppContainer
@@ -35,6 +36,8 @@ import com.foldspace.launcher.ui.theme.MotionLevel
 import com.foldspace.launcher.ui.theme.ThemeTokens
 import com.foldspace.launcher.ui.theme.Themes
 import com.foldspace.launcher.ui.theme.effectiveMotion
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -194,6 +197,40 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         .map(WorkItemsDeriver::derive)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WorkItemsState())
 
+    // ---- Widgets (phase 4) ----
+
+    private val _widgetPickerOpen = MutableStateFlow(false)
+    val widgetPickerOpen: StateFlow<Boolean> = _widgetPickerOpen.asStateFlow()
+
+    /** Where the widget the user is adding will land. */
+    private var pendingWidgetCell: Triple<Int, Int, Int>? = null
+
+    /**
+     * Asks the Activity to run a system dialog. Only an Activity can launch
+     * the bind-consent and configure flows, so the ViewModel hands the request
+     * over rather than holding an Activity reference.
+     */
+    sealed interface WidgetSystemRequest {
+        val appWidgetId: Int
+
+        data class Bind(
+            override val appWidgetId: Int,
+            val info: AppWidgetProviderInfo,
+        ) : WidgetSystemRequest
+
+        data class Configure(
+            override val appWidgetId: Int,
+            val info: AppWidgetProviderInfo,
+        ) : WidgetSystemRequest
+    }
+
+    private val _widgetRequests = MutableSharedFlow<WidgetSystemRequest>(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val widgetRequests: MutableSharedFlow<WidgetSystemRequest> = _widgetRequests
+
     private val _drawerOpen = MutableStateFlow(false)
     val drawerOpen: StateFlow<Boolean> = _drawerOpen.asStateFlow()
 
@@ -229,24 +266,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     }
                     container.homeLayout.syncInstalled(apps)
                 }
-        }
-        viewModelScope.launch {
-            // The leftmost feed page and 工作's work page are declared once so
-            // they exist even while empty — an undeclared empty page is
-            // indistinguishable from no page at all.
-            container.settings.currentSpace.collect { space ->
-                for (posture in Posture.entries) {
-                    when (space) {
-                        SpaceId.General ->
-                            container.homeLayout.ensurePage(space, posture, FEED_PAGE_INDEX, PageKind.Feed)
-
-                        SpaceId.Work ->
-                            container.homeLayout.ensurePage(space, posture, FEED_PAGE_INDEX, PageKind.Work)
-
-                        SpaceId.Simple -> Unit
-                    }
-                }
-            }
         }
         viewModelScope.launch {
             // The unfolded arrangement is created from the folded one the
@@ -366,7 +385,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun removeFromFolder(item: HomeItem) = viewModelScope.launch {
         val layout = homeLayout.value
-        val free = layout.firstFreeCellAnywhere() ?: return@launch
+        val free = layout.firstFreeCellAnywhere()
         container.homeLayout.removeFromFolder(item.id, free.first, free.second, free.third)
     }
 
@@ -422,6 +441,99 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     // ---- Pages ----
+
+    /** Long-press on blank space. Today it goes straight to the picker. */
+    fun onLongPressEmptyCell(page: Int, cellX: Int, cellY: Int) {
+        pendingWidgetCell = Triple(page, cellX, cellY)
+        _widgetPickerOpen.value = true
+    }
+
+    fun closeWidgetPicker() {
+        _widgetPickerOpen.value = false
+        pendingWidgetCell = null
+    }
+
+    fun availableWidgets(): List<AppWidgetProviderInfo> =
+        container.widgetHost.installedProviders()
+
+    /**
+     * §13 — only a system app holds BIND_APPWIDGET, so an ordinary launcher
+     * has to ask the user per widget. The id is allocated first because the
+     * consent dialog is about that specific id.
+     */
+    fun chooseWidget(info: AppWidgetProviderInfo) {
+        _widgetPickerOpen.value = false
+        val id = container.widgetHost.allocateId()
+        if (container.widgetHost.canBindWithoutPrompt(info, id)) {
+            afterBind(id, info)
+        } else {
+            _widgetRequests.tryEmit(WidgetSystemRequest.Bind(id, info))
+        }
+    }
+
+    fun onWidgetBindResult(appWidgetId: Int, info: AppWidgetProviderInfo, granted: Boolean) {
+        if (!granted) {
+            // An id that never got bound would otherwise leak for the life of
+            // the host.
+            container.widgetHost.releaseId(appWidgetId)
+            pendingWidgetCell = null
+            return
+        }
+        afterBind(appWidgetId, info)
+    }
+
+    private fun afterBind(appWidgetId: Int, info: AppWidgetProviderInfo) {
+        if (container.widgetHost.needsConfiguration(info)) {
+            _widgetRequests.tryEmit(WidgetSystemRequest.Configure(appWidgetId, info))
+        } else {
+            placeWidget(appWidgetId, info)
+        }
+    }
+
+    fun onWidgetConfigureResult(
+        appWidgetId: Int,
+        info: AppWidgetProviderInfo,
+        completed: Boolean,
+    ) {
+        if (!completed) {
+            container.widgetHost.releaseId(appWidgetId)
+            pendingWidgetCell = null
+            return
+        }
+        placeWidget(appWidgetId, info)
+    }
+
+    private fun placeWidget(appWidgetId: Int, info: AppWidgetProviderInfo) {
+        val cell = pendingWidgetCell ?: homeLayout.value.firstFreeCellAnywhere()
+        pendingWidgetCell = null
+
+        viewModelScope.launch {
+            val layout = homeLayout.value
+            val (spanX, spanY) = container.widgetHost.defaultSpan(
+                info,
+                cellWidthDp = 72,
+                cellHeightDp = 88,
+            )
+            container.homeLayout.addWidget(
+                space = state.value.space,
+                posture = currentPosture(),
+                pageIndex = cell.first,
+                cellX = cell.second,
+                cellY = cell.third,
+                appWidgetId = appWidgetId,
+                provider = info.provider.flattenToString(),
+                spanX = spanX.coerceAtMost(layout.grid.columns),
+                spanY = spanY.coerceAtMost(layout.grid.rows),
+            )
+        }
+    }
+
+    fun removeItem(item: HomeItem) = viewModelScope.launch {
+        if (item.type == com.foldspace.launcher.home.HomeItemType.Widget) {
+            item.appWidgetId?.let(container.widgetHost::releaseId)
+        }
+        container.homeLayout.removeItem(item.id)
+    }
 
     fun addWidgetPage() = viewModelScope.launch {
         container.homeLayout.addPage(state.value.space, currentPosture(), PageKind.Widgets)
@@ -495,11 +607,5 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private companion object {
         /** §5.4 — "使用者可固定 2–3 個 App"; four is the hard ceiling. */
         const val MAX_PINNED = 4
-
-        /**
-         * The feed and work pages live at index 0 so they are the page to the
-         * *left* of the apps, which is where the request put them.
-         */
-        const val FEED_PAGE_INDEX = 0
     }
 }

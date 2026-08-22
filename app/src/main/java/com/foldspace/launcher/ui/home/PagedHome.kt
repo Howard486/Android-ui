@@ -28,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,10 +55,6 @@ import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 import com.foldspace.launcher.ui.widgets.WidgetCell
 import com.foldspace.launcher.widgets.WidgetHostController
 import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 import kotlin.math.roundToInt
 
 /** Where a drag currently is, and what it would do if released there. */
@@ -90,18 +85,20 @@ fun PagedHome(
     onOpenFolder: (HomeItem) -> Unit,
     onMove: (item: HomeItem, page: Int, cellX: Int, cellY: Int) -> Unit,
     onDropOnto: (moving: HomeItem, target: HomeItem) -> Unit,
+    onLongPressEmpty: (page: Int, cellX: Int, cellY: Int) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     feedContent: (@Composable () -> Unit)? = null,
     workContent: (@Composable () -> Unit)? = null,
 ) {
-    val pages = layout.pages.ifEmpty { listOf(HomePage(0, emptyList())) }
+    val gridPages = layout.pages.ifEmpty { listOf(HomePage(0, emptyList())) }
+    val leadingCount = if (layout.leading != null) 1 else 0
     val pagerState = rememberPagerState(
         // Land on the first grid page, not on the feed. Opening the launcher
         // into a news feed rather than your apps would be the wrong default
         // however much the feed is worth having one swipe away.
-        initialPage = pages.indexOfFirst { it.kind.isGrid }.coerceAtLeast(0),
-        pageCount = { pages.size },
+        initialPage = leadingCount,
+        pageCount = { gridPages.size + leadingCount },
     )
 
     var drag by remember { mutableStateOf<DragState?>(null) }
@@ -111,12 +108,6 @@ fun PagedHome(
             .fillMaxSize()
             .padding(contentPadding),
     ) {
-        StatusStrip(
-            notifications = notifications,
-            editing = editing,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-        )
-
         Box(
             Modifier
                 .fillMaxWidth()
@@ -129,15 +120,17 @@ fun PagedHome(
                 // A drag owns the pointer; letting the pager also read it means
                 // a diagonal drag flings the page out from under the icon.
                 userScrollEnabled = drag == null,
-            ) { pageIndex ->
-                val page = pages.getOrNull(pageIndex)
+            ) { pagerIndex ->
+                val leading = layout.leading.takeIf { pagerIndex < leadingCount }
+                val page = gridPages.getOrNull(pagerIndex - leadingCount)
                 when {
-                    page == null -> EmptyPage("這一頁還是空的")
-                    page.kind == PageKind.Feed ->
+                    leading == PageKind.Feed ->
                         feedContent?.invoke() ?: EmptyPage("尚未設定新聞來源")
 
-                    page.kind == PageKind.Work ->
+                    leading == PageKind.Work ->
                         workContent?.invoke() ?: EmptyPage("尚無工項")
+
+                    page == null -> EmptyPage("這一頁還是空的")
 
                     else -> CellGrid(
                         layout = layout,
@@ -147,11 +140,14 @@ fun PagedHome(
                         widgetHost = widgetHost,
                         editing = editing,
                         drag = drag,
-                        pageIndex = pageIndex,
+                        pageIndex = page.index,
+                        pagerIndex = pagerIndex,
                         pagerState = pagerState,
+                        leadingCount = leadingCount,
                         onLaunch = onLaunch,
                         onLongPress = onLongPress,
                         onOpenFolder = onOpenFolder,
+                        onLongPressEmpty = onLongPressEmpty,
                         onDragUpdate = { drag = it },
                         onDragEnd = {
                             val current = drag
@@ -183,9 +179,10 @@ fun PagedHome(
             }
         }
 
-        if (pages.size > 1) {
+        if (gridPages.size + leadingCount > 1) {
             PageDots(
-                pages = pages,
+                leading = layout.leading,
+                gridPages = gridPages,
                 selected = pagerState.currentPage,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -214,10 +211,13 @@ private fun CellGrid(
     editing: Boolean,
     drag: DragState?,
     pageIndex: Int,
+    pagerIndex: Int,
     pagerState: PagerState,
+    leadingCount: Int,
     onLaunch: (HomeItem) -> Unit,
     onLongPress: (HomeItem) -> Unit,
     onOpenFolder: (HomeItem) -> Unit,
+    onLongPressEmpty: (page: Int, cellX: Int, cellY: Int) -> Unit,
     onDragUpdate: (DragState?) -> Unit,
     onDragEnd: () -> Unit,
 ) {
@@ -225,6 +225,9 @@ private fun CellGrid(
     var gridSize by remember { mutableStateOf(IntSize.Zero) }
     val localDensity = LocalDensity.current
     val activeDrag = drag?.takeIf { it.targetPage == pageIndex }
+
+    /** Pager positions include the leading page; stored page indices do not. */
+    fun gridPageAt(pagerPosition: Int) = pagerPosition - leadingCount
 
     // Dragging to an edge turns the page, which is the only practical way to
     // move an app across five pages.
@@ -237,15 +240,13 @@ private fun CellGrid(
             pointerX > gridSize.width - edge -> pagerState.currentPage + 1
             else -> return@LaunchedEffect
         }
-        if (next < 0 || next >= pagerState.pageCount) return@LaunchedEffect
+        // Never drag onto the leading page — it holds no cells.
+        if (next < leadingCount || next >= pagerState.pageCount) return@LaunchedEffect
         delay(EDGE_DWELL_MS)
         pagerState.animateScrollToPage(next)
     }
 
-    val dragModifier = if (!editing) {
-        Modifier
-    } else {
-        Modifier.pointerInput(page.index, layout.grid) {
+    val dragModifier = Modifier.pointerInput(page.index, layout.grid, editing) {
             var position = Offset.Zero
 
             fun cellAt(offset: Offset): Pair<Int, Int>? {
@@ -260,8 +261,15 @@ private fun CellGrid(
                     position = offset
                     val cell = cellAt(offset)
                     val item = cell?.let(byCell::get)
-                    if (item != null) {
-                        onDragUpdate(DragState(item, offset, pageIndex, cell, null))
+                    when {
+                        // Long-pressing an icon picks it up. Doing so outside
+                        // edit mode is what people expect, so it enters edit
+                        // mode rather than refusing.
+                        item != null -> onDragUpdate(DragState(item, offset, pageIndex, cell, null))
+
+                        // Long-pressing blank space is the only discoverable
+                        // way to add a widget.
+                        cell != null -> onLongPressEmpty(pageIndex, cell.first, cell.second)
                     }
                 },
                 onDrag = { change, amount ->
@@ -272,7 +280,8 @@ private fun CellGrid(
                     onDragUpdate(
                         current.copy(
                             pointer = position,
-                            targetPage = pagerState.currentPage,
+                            targetPage = gridPageAt(pagerState.currentPage)
+                                .coerceAtLeast(0),
                             targetCell = cell,
                             targetItem = cell?.let(byCell::get)
                                 ?.takeIf { it.id != current.item.id },
@@ -282,7 +291,6 @@ private fun CellGrid(
                 onDragEnd = onDragEnd,
                 onDragCancel = onDragEnd,
             )
-        }
     }
 
     Column(
@@ -498,73 +506,31 @@ private fun EmptyPage(message: String) {
     }
 }
 
-/**
- * A slim clock and unread count above the grid.
- *
- * Deliberately not a card: with a fixed 5x7 grid, anything that occupies cells
- * costs the user app slots, and the clock is the one thing they should not
- * have to spend a slot on.
- */
 @Composable
-private fun StatusStrip(
-    notifications: NotificationSummary,
-    editing: Boolean,
+private fun PageDots(
+    leading: PageKind?,
+    gridPages: List<HomePage>,
+    selected: Int,
     modifier: Modifier = Modifier,
 ) {
     val tokens = FoldSpaceTheme.tokens
-    val now by produceState(initialValue = Date()) {
-        while (true) {
-            value = Date()
-            val calendar = Calendar.getInstance()
-            delay(
-                60_000L - (calendar.get(Calendar.SECOND) * 1000L +
-                    calendar.get(Calendar.MILLISECOND)),
-            )
-        }
-    }
+    val leadingCount = if (leading != null) 1 else 0
 
-    Row(
-        modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = if (editing) "編輯中 · 長按拖曳" else statusFormat.format(now),
-            style = MaterialTheme.typography.titleMedium,
-            color = if (editing) tokens.accent else tokens.textPrimary,
-        )
-        val unread = notifications.items.size
-        if (unread > 0 && !editing) {
-            Text(
-                text = "$unread 則通知",
-                style = MaterialTheme.typography.labelSmall,
-                color = tokens.accent,
-            )
-        }
-    }
-}
-
-@Composable
-private fun PageDots(pages: List<HomePage>, selected: Int, modifier: Modifier = Modifier) {
-    val tokens = FoldSpaceTheme.tokens
     Row(
         modifier,
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        pages.forEachIndexed { index, page ->
+        repeat(leadingCount + gridPages.size) { index ->
             val isSelected = index == selected
-            // Non-grid pages get a wider marker so the feed and work pages are
-            // findable by their dot rather than by swiping to see what is there.
+            val isLeading = index < leadingCount
+            // The leading page gets a wider marker so it is findable by its dot
+            // rather than by swiping to see what is over there.
             Box(
                 Modifier
                     .padding(horizontal = 3.dp)
                     .size(
-                        width = if (page.kind.isGrid) {
-                            if (isSelected) 7.dp else 5.dp
-                        } else {
-                            14.dp
-                        },
+                        width = if (isLeading) 14.dp else if (isSelected) 7.dp else 5.dp,
                         height = if (isSelected) 7.dp else 5.dp,
                     )
                     .clip(CircleShape)
@@ -579,5 +545,3 @@ private fun PageDots(pages: List<HomePage>, selected: Int, modifier: Modifier = 
 /** How close to the edge a drag has to get before the page turns. */
 private const val EDGE_FRACTION = 0.12f
 private const val EDGE_DWELL_MS = 500L
-
-private val statusFormat = SimpleDateFormat("HH:mm  EEE M/d", Locale.getDefault())

@@ -1,5 +1,9 @@
 package com.foldspace.launcher
 
+import android.app.Activity
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProviderInfo
+import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
@@ -45,12 +49,44 @@ class MainActivity : ComponentActivity() {
             viewModel.refreshPermissions()
         }
 
+    /**
+     * §13 — the bind-consent and configure dialogs can only be launched from
+     * an Activity, so the ViewModel emits a request and this runs it. The
+     * provider is remembered across the round trip because the result carries
+     * only the widget id.
+     */
+    private var pendingWidgetInfo: AppWidgetProviderInfo? = null
+
+    private val widgetBindRequest =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val info = pendingWidgetInfo ?: return@registerForActivityResult
+            val id = result.data?.getIntExtra(
+                AppWidgetManager.EXTRA_APPWIDGET_ID,
+                AppWidgetManager.INVALID_APPWIDGET_ID,
+            ) ?: AppWidgetManager.INVALID_APPWIDGET_ID
+            viewModel.onWidgetBindResult(id, info, result.resultCode == Activity.RESULT_OK)
+        }
+
+    private val widgetConfigureRequest =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val info = pendingWidgetInfo ?: return@registerForActivityResult
+            val id = result.data?.getIntExtra(
+                AppWidgetManager.EXTRA_APPWIDGET_ID,
+                AppWidgetManager.INVALID_APPWIDGET_ID,
+            ) ?: AppWidgetManager.INVALID_APPWIDGET_ID
+            viewModel.onWidgetConfigureResult(id, info, result.resultCode == Activity.RESULT_OK)
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
+
+        lifecycleScope.launch {
+            viewModel.widgetRequests.collect(::runWidgetRequest)
+        }
 
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
@@ -118,6 +154,38 @@ class MainActivity : ComponentActivity() {
         } else {
             // §5.1 fallback for devices without the HOME role.
             startActivity(viewModel.homeSettingsIntent())
+        }
+    }
+
+    private fun runWidgetRequest(request: LauncherViewModel.WidgetSystemRequest) {
+        when (request) {
+            is LauncherViewModel.WidgetSystemRequest.Bind -> {
+                pendingWidgetInfo = request.info
+                runCatching {
+                    widgetBindRequest.launch(
+                        viewModel.widgetHost()
+                            .bindPermissionIntent(request.appWidgetId, request.info),
+                    )
+                }
+            }
+
+            is LauncherViewModel.WidgetSystemRequest.Configure -> {
+                pendingWidgetInfo = request.info
+                val configure: ComponentName = request.info.configure ?: run {
+                    viewModel.onWidgetConfigureResult(request.appWidgetId, request.info, true)
+                    return
+                }
+                val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE)
+                    .setComponent(configure)
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, request.appWidgetId)
+                runCatching { widgetConfigureRequest.launch(intent) }
+                    .onFailure {
+                        // A provider can declare a configure activity that
+                        // refuses to start. Placing it unconfigured beats
+                        // dropping the widget the user just chose.
+                        viewModel.onWidgetConfigureResult(request.appWidgetId, request.info, true)
+                    }
+            }
         }
     }
 

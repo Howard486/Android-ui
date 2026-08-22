@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +44,7 @@ import com.foldspace.launcher.home.HomeItemType
 import com.foldspace.launcher.home.HomeLayout
 import com.foldspace.launcher.ui.feed.FeedPage
 import com.foldspace.launcher.ui.home.FolderSheet
+import com.foldspace.launcher.ui.widgets.WidgetPicker
 import com.foldspace.launcher.ui.work.WorkItemsPage
 import com.foldspace.launcher.ui.drawer.AppSearchOverlay
 import com.foldspace.launcher.ui.home.BookHome
@@ -56,6 +59,11 @@ import com.foldspace.launcher.ui.notifications.NotificationCenter
 import com.foldspace.launcher.ui.powerdock.PowerDockScreen
 import com.foldspace.launcher.ui.settings.SettingsScreen
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
+import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 /**
  * The launcher's single screen.
@@ -85,6 +93,7 @@ fun FoldSpaceRoot(
     val feedState by viewModel.feedState.collectAsStateWithLifecycle()
     val workItems by viewModel.workItems.collectAsStateWithLifecycle()
     val organiseMessage by viewModel.organiseMessage.collectAsStateWithLifecycle()
+    val widgetPickerOpen by viewModel.widgetPickerOpen.collectAsStateWithLifecycle()
 
     val openFolder = remember(openFolderId, homeLayout) {
         openFolderId?.let { id ->
@@ -104,7 +113,12 @@ fun FoldSpaceRoot(
             GestureZones.reservedBottomPadding(state.settings.samsungWalletCompatibility),
     )
 
-    val anyOverlayOpen = drawerOpen || notificationCenterOpen || settingsOpen || openFolder != null
+    // Pages sit below the header, so they must not re-apply the status-bar
+    // inset the header already consumed.
+    val bodyPadding = PaddingValues(bottom = systemPadding.calculateBottomPadding())
+
+    val anyOverlayOpen = drawerOpen || notificationCenterOpen || settingsOpen ||
+        openFolder != null || widgetPickerOpen
 
     // Back on a launcher means "close whatever is open", never "leave".
     BackHandler(enabled = anyOverlayOpen || editing) {
@@ -112,6 +126,7 @@ fun FoldSpaceRoot(
         viewModel.setNotificationCenterOpen(false)
         viewModel.setSettingsOpen(false)
         viewModel.closeFolder()
+        viewModel.closeWidgetPicker()
         viewModel.setEditing(false)
     }
 
@@ -143,12 +158,13 @@ fun FoldSpaceRoot(
                 onMoveItem = viewModel::moveItem,
                 onDropOnto = viewModel::dropOnto,
                 onToggleEditing = { viewModel.setEditing(!editing) },
+                onLongPressEmpty = viewModel::onLongPressEmptyCell,
                 feedContent = {
                     FeedPage(
                         state = feedState,
                         onRefresh = { viewModel.refreshFeed() },
                         onOpen = { item -> item.link?.let(onOpenLink) },
-                        contentPadding = systemPadding,
+                        contentPadding = bodyPadding,
                     )
                 },
                 workContent = {
@@ -156,7 +172,7 @@ fun FoldSpaceRoot(
                         state = workItems,
                         onOpenApp = onOpenPackage,
                         onRequestNotificationAccess = onOpenNotificationSettings,
-                        contentPadding = systemPadding,
+                        contentPadding = bodyPadding,
                     )
                 },
                 onLaunch = viewModel::launch,
@@ -227,6 +243,15 @@ fun FoldSpaceRoot(
             )
         }
 
+        Overlay(visible = widgetPickerOpen) {
+            WidgetPicker(
+                providers = viewModel.availableWidgets(),
+                onPick = viewModel::chooseWidget,
+                onDismiss = viewModel::closeWidgetPicker,
+                contentPadding = systemPadding,
+            )
+        }
+
         Overlay(visible = settingsOpen) {
             SettingsScreen(
                 state = state,
@@ -274,6 +299,7 @@ private fun HomeSurface(
     onMoveItem: (HomeItem, Int, Int, Int) -> Unit,
     onDropOnto: (HomeItem, HomeItem) -> Unit,
     onToggleEditing: () -> Unit,
+    onLongPressEmpty: (Int, Int, Int) -> Unit,
     feedContent: @Composable () -> Unit,
     workContent: @Composable () -> Unit,
     onLaunch: (AppEntry) -> Unit,
@@ -287,6 +313,10 @@ private fun HomeSurface(
     onDismissSuggestion: () -> Unit,
     contentPadding: PaddingValues,
 ) {
+    // The header owns the status-bar inset; the body keeps only the bottom one
+    // (nav bar plus the reserved Wallet strip, §6.1).
+    val bodyPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding())
+
     Box(
         Modifier
             .fillMaxSize()
@@ -296,6 +326,21 @@ private fun HomeSurface(
                 onPrevious = { onSelectSpace(state.space.previous()) },
             ),
     ) {
+        // Header and content are stacked in a Column, not overlaid. They used
+        // to be a Box with the Space bar floating over the top of the page,
+        // which drew the pills straight through the clock.
+        Column(Modifier.fillMaxSize()) {
+            LauncherHeader(
+                state = state,
+                editing = editing,
+                onToggleEditing = onToggleEditing,
+                onSelectSpace = onSelectSpace,
+                onOpenNotifications = onOpenNotifications,
+                onOpenSettings = onOpenSettings,
+                topPadding = contentPadding.calculateTopPadding(),
+            )
+
+            Box(Modifier.fillMaxWidth().weight(1f)) {
         when {
             // 簡易 is one fixed screen in every posture — pages and swiping
             // are exactly what it exists to remove.
@@ -304,17 +349,17 @@ private fun HomeSurface(
                 notifications = state.notifications,
                 onLaunch = onLaunchItem,
                 onLongPress = onItemLongPress,
-                contentPadding = contentPadding,
+                contentPadding = bodyPadding,
             )
 
             // Half-open poses keep the card layouts: a 5x7 grid split across
             // a horizontal crease is unusable, and these are transient poses
             // rather than somewhere apps get arranged.
             state.window.layoutMode == LayoutMode.Tabletop ->
-                TabletopHome(state, onLaunch, onLongPress, contentPadding = contentPadding)
+                TabletopHome(state, onLaunch, onLongPress, contentPadding = bodyPadding)
 
             state.window.layoutMode == LayoutMode.Book ->
-                BookHome(state, onLaunch, onLongPress, contentPadding = contentPadding)
+                BookHome(state, onLaunch, onLongPress, contentPadding = bodyPadding)
 
             else -> PagedHome(
                 layout = layout,
@@ -327,23 +372,15 @@ private fun HomeSurface(
                 onOpenFolder = onOpenFolder,
                 onMove = onMoveItem,
                 onDropOnto = onDropOnto,
-                contentPadding = contentPadding,
+                onLongPressEmpty = onLongPressEmpty,
+                contentPadding = bodyPadding,
                 feedContent = feedContent,
                 workContent = workContent,
             )
         }
 
-        SpaceBar(
-            state = state,
-            editing = editing,
-            onToggleEditing = onToggleEditing,
-            onSelectSpace = onSelectSpace,
-            onOpenNotifications = onOpenNotifications,
-            onOpenSettings = onOpenSettings,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = contentPadding.calculateTopPadding()),
-        )
+            }
+        }
 
         // §7.2 Suggest-first: an offer with a visible reason, never a silent switch.
         state.suggestion?.let { suggestion ->
@@ -364,27 +401,79 @@ private fun HomeSurface(
     }
 }
 
-/** §3 — the Space strip. Tapping switches; swiping left/right does the same. */
+/**
+ * Clock, actions and the Space strip.
+ *
+ * Two rows rather than one: the clock and three action labels already fill a
+ * folded screen's width, and cramming the Space pills onto the same line is
+ * what produced the overlap this replaced.
+ */
 @Composable
-private fun SpaceBar(
+private fun LauncherHeader(
     state: LauncherUiState,
     editing: Boolean,
     onToggleEditing: () -> Unit,
     onSelectSpace: (SpaceId) -> Unit,
     onOpenNotifications: () -> Unit,
     onOpenSettings: () -> Unit,
+    topPadding: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
 ) {
     val tokens = FoldSpaceTheme.tokens
-    Row(
+    val now by produceState(initialValue = Date()) {
+        while (true) {
+            value = Date()
+            val calendar = Calendar.getInstance()
+            delay(
+                60_000L - (calendar.get(Calendar.SECOND) * 1000L +
+                    calendar.get(Calendar.MILLISECOND)),
+            )
+        }
+    }
+
+    Column(
         modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(top = topPadding)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
     ) {
         Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (editing) "編輯中 · 長按拖曳" else headerClockFormat.format(now),
+                style = MaterialTheme.typography.titleMedium,
+                color = if (editing) tokens.accent else tokens.textPrimary,
+                modifier = Modifier.weight(1f),
+            )
+
+            val unread = state.notifications.items.size
+            Text(
+                text = if (unread > 0) "通知 $unread" else "通知",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (unread > 0) tokens.accent else tokens.textMuted,
+                modifier = Modifier.clickable(onClick = onOpenNotifications).padding(6.dp),
+            )
+            Text(
+                text = if (editing) "完成" else "編輯",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (editing) tokens.accent else tokens.textMuted,
+                modifier = Modifier.clickable(onClick = onToggleEditing).padding(6.dp),
+            )
+            Text(
+                text = "設定",
+                style = MaterialTheme.typography.labelSmall,
+                color = tokens.textMuted,
+                modifier = Modifier.clickable(onClick = onOpenSettings).padding(6.dp),
+            )
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        Row(
             Modifier
-                .weight(1f)
+                .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -398,30 +487,10 @@ private fun SpaceBar(
                 }
             }
         }
-
-        Spacer(Modifier.width(8.dp))
-
-        val unread = state.notifications.items.size
-        Text(
-            text = if (unread > 0) "通知 $unread" else "通知",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (unread > 0) tokens.accent else tokens.textMuted,
-            modifier = Modifier.clickable(onClick = onOpenNotifications).padding(6.dp),
-        )
-        Text(
-            text = if (editing) "完成" else "編輯",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (editing) tokens.accent else tokens.textMuted,
-            modifier = Modifier.clickable(onClick = onToggleEditing).padding(6.dp),
-        )
-        Text(
-            text = "設定",
-            style = MaterialTheme.typography.labelSmall,
-            color = tokens.textMuted,
-            modifier = Modifier.clickable(onClick = onOpenSettings).padding(6.dp),
-        )
     }
 }
+
+private val headerClockFormat = SimpleDateFormat("HH:mm  EEE M/d", Locale.getDefault())
 
 @Composable
 private fun SuggestionBanner(
