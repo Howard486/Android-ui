@@ -36,10 +36,12 @@ import com.foldspace.launcher.core.launcher.AppEntry
 import com.foldspace.launcher.spaces.SpaceId
 import com.foldspace.launcher.ui.components.FoldCard
 import com.foldspace.launcher.ui.components.Pill
-import com.foldspace.launcher.ui.drawer.AppDrawer
+import com.foldspace.launcher.home.HomeItem
+import com.foldspace.launcher.home.HomeLayout
+import com.foldspace.launcher.ui.drawer.AppSearchOverlay
 import com.foldspace.launcher.ui.home.BookHome
-import com.foldspace.launcher.ui.home.CompactHome
-import com.foldspace.launcher.ui.home.ExpandedWorkspace
+import com.foldspace.launcher.ui.home.PagedHome
+import com.foldspace.launcher.ui.home.SimpleHome
 import com.foldspace.launcher.ui.home.GestureZones
 import com.foldspace.launcher.ui.home.TabletopHome
 import com.foldspace.launcher.ui.home.launcherVerticalGestures
@@ -70,6 +72,7 @@ fun FoldSpaceRoot(
     val drawerOpen by viewModel.drawerOpen.collectAsStateWithLifecycle()
     val notificationCenterOpen by viewModel.notificationCenterOpen.collectAsStateWithLifecycle()
     val settingsOpen by viewModel.settingsOpen.collectAsStateWithLifecycle()
+    val homeLayout by viewModel.homeLayout.collectAsStateWithLifecycle()
 
     val tokens = FoldSpaceTheme.tokens
 
@@ -109,6 +112,9 @@ fun FoldSpaceRoot(
         } else {
             HomeSurface(
                 state = state,
+                layout = homeLayout,
+                onLaunchItem = viewModel::launch,
+                onItemLongPress = viewModel::onHomeItemLongPress,
                 onLaunch = viewModel::launch,
                 onLongPress = viewModel::togglePin,
                 onSwipeUp = { viewModel.setDrawerOpen(true) },
@@ -123,7 +129,7 @@ fun FoldSpaceRoot(
         }
 
         Overlay(visible = drawerOpen) {
-            AppDrawer(
+            AppSearchOverlay(
                 apps = state.apps,
                 notifications = state.notifications,
                 suggested = state.dockApps(),
@@ -179,6 +185,9 @@ private fun Overlay(visible: Boolean, content: @Composable () -> Unit) {
 @Composable
 private fun HomeSurface(
     state: LauncherUiState,
+    layout: HomeLayout,
+    onLaunchItem: (HomeItem) -> Unit,
+    onItemLongPress: (HomeItem) -> Unit,
     onLaunch: (AppEntry) -> Unit,
     onLongPress: (AppEntry) -> Unit,
     onSwipeUp: () -> Unit,
@@ -199,11 +208,34 @@ private fun HomeSurface(
                 onPrevious = { onSelectSpace(state.space.previous()) },
             ),
     ) {
-        when (state.window.layoutMode) {
-            LayoutMode.Compact -> CompactHome(state, onLaunch, onLongPress, contentPadding = contentPadding)
-            LayoutMode.Expanded -> ExpandedWorkspace(state, onLaunch, onLongPress, contentPadding = contentPadding)
-            LayoutMode.Tabletop -> TabletopHome(state, onLaunch, onLongPress, contentPadding = contentPadding)
-            LayoutMode.Book -> BookHome(state, onLaunch, onLongPress, contentPadding = contentPadding)
+        when {
+            // 簡易 is one fixed screen in every posture — pages and swiping
+            // are exactly what it exists to remove.
+            state.space == SpaceId.Simple -> SimpleHome(
+                layout = layout,
+                notifications = state.notifications,
+                onLaunch = onLaunchItem,
+                onLongPress = onItemLongPress,
+                contentPadding = contentPadding,
+            )
+
+            // Half-open poses keep the card layouts: a 5x7 grid split across
+            // a horizontal crease is unusable, and these are transient poses
+            // rather than somewhere apps get arranged.
+            state.window.layoutMode == LayoutMode.Tabletop ->
+                TabletopHome(state, onLaunch, onLongPress, contentPadding = contentPadding)
+
+            state.window.layoutMode == LayoutMode.Book ->
+                BookHome(state, onLaunch, onLongPress, contentPadding = contentPadding)
+
+            else -> PagedHome(
+                layout = layout,
+                notifications = state.notifications,
+                density = state.spaceConfig.density,
+                onLaunch = onLaunchItem,
+                onLongPress = onItemLongPress,
+                contentPadding = contentPadding,
+            )
         }
 
         SpaceBar(

@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -79,6 +80,12 @@ dependencies {
     implementation(libs.androidx.window)
     // Settings / Space persistence — spec §16.1.
     implementation(libs.androidx.datastore.preferences)
+
+    // Home-screen layout: pages, cells, folders, widget bindings. This is the
+    // relational data the V0.1 README said would justify Room; here it is.
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)

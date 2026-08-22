@@ -7,6 +7,8 @@ import com.foldspace.launcher.context.ContextEngine
 import com.foldspace.launcher.context.RuleEngine
 import com.foldspace.launcher.core.launcher.HomeRoleManager
 import com.foldspace.launcher.core.launcher.LauncherAppsRepository
+import com.foldspace.launcher.home.HomeLayoutRepository
+import com.foldspace.launcher.home.db.FoldSpaceDatabase
 import com.foldspace.launcher.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +43,14 @@ class AppContainer(context: Context) {
     val homeRole = HomeRoleManager(context)
 
     val launcherApps = LauncherAppsRepository(context, appScope)
+
+    private val database = FoldSpaceDatabase.get(context)
+
+    /** The home-screen arrangement: pages, cells, folders, widget bindings. */
+    val homeLayout = HomeLayoutRepository(
+        dao = database.homeItemDao(),
+        installedApps = launcherApps.apps,
+    )
 
     /**
      * §8 — V0.1 ships with no on-device model behind this. Swapping in the ML

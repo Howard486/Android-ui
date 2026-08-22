@@ -1,5 +1,15 @@
 package com.foldspace.launcher.ui.home
 
+/*
+ * Half-open layouts only.
+ *
+ * The folded and unfolded home screens moved to PagedHome when apps became
+ * user-placed: a fixed grid the user arranged is a different thing from a
+ * dashboard the launcher composed. Tabletop and book keep the card layouts
+ * because a 5x7 grid split across a physical crease is unusable, and because
+ * these are poses you hold for a minute, not somewhere you arrange apps.
+ */
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,166 +40,6 @@ import com.foldspace.launcher.ui.cards.ClockCard
 import com.foldspace.launcher.ui.cards.NativeCard
 import com.foldspace.launcher.ui.components.AppTile
 import com.foldspace.launcher.ui.dock.Dock
-
-/**
- * §4.1 Folded — one-handed. A short grid of the most relevant apps, the clock,
- * a compact notification line, and the dock. Explicitly *not* a scaled-down
- * dashboard.
- */
-@Composable
-fun CompactHome(
-    state: LauncherUiState,
-    onLaunch: (AppEntry) -> Unit,
-    onLongPress: (AppEntry) -> Unit,
-    modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(0.dp),
-) {
-    val density = state.spaceConfig.density
-    val topApps = state.dockApps().take(density.compactMaxApps)
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(contentPadding)
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Column {
-            Spacer(Modifier.height(24.dp))
-            ClockCard(Modifier.fillMaxWidth())
-            Spacer(Modifier.height(12.dp))
-            // §4.1 — summarised, never a wall of notifications.
-            NativeCard(
-                id = CardId.Notifications,
-                notifications = state.notifications,
-                batteryPercent = state.powerDock.batteryPercent,
-                charging = state.powerDock.active,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-
-        Column {
-            if (topApps.isNotEmpty()) {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(density.compactColumns),
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    userScrollEnabled = false,
-                ) {
-                    items(topApps, key = { it.key }) { entry ->
-                        AppTile(
-                            entry = entry,
-                            onClick = { onLaunch(entry) },
-                            onLongClick = { onLongPress(entry) },
-                            iconSize = density.iconSizeDp.dp,
-                            badgeCount = state.notifications.countFor(entry.packageName),
-                        )
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-            }
-
-            Dock(
-                apps = state.dockApps().take(density.compactDockSlots()),
-                notifications = state.notifications,
-                onLaunch = onLaunch,
-                onLongPress = onLongPress,
-                density = density,
-            )
-            Spacer(Modifier.height(8.dp))
-        }
-    }
-}
-
-/**
- * §4.2 Unfolded — a workspace. Two or three columns of cards beside a wider
- * app area, which is a different information architecture, not a zoom.
- */
-@Composable
-fun ExpandedWorkspace(
-    state: LauncherUiState,
-    onLaunch: (AppEntry) -> Unit,
-    onLongPress: (AppEntry) -> Unit,
-    modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(0.dp),
-) {
-    val density = state.spaceConfig.density
-    val cards = state.spaceConfig.cards
-    val columns = if (state.window.widthDp >= THREE_COLUMN_WIDTH_DP) 3 else 2
-    val apps = state.dockApps()
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(contentPadding)
-            .padding(horizontal = 20.dp),
-    ) {
-        Spacer(Modifier.height(20.dp))
-
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            // Card column(s) — the dashboard half of the workspace.
-            Column(
-                Modifier
-                    .weight(if (columns == 3) 2f else 1f)
-                    .fillMaxHeight()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                cards.forEach { card ->
-                    NativeCard(
-                        id = card,
-                        notifications = state.notifications,
-                        batteryPercent = state.powerDock.batteryPercent,
-                        charging = state.powerDock.active,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-
-            // App column — the launch half.
-            Column(
-                Modifier
-                    .weight(1f)
-                    .fillMaxHeight(),
-            ) {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(density.drawerCellDp.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(apps, key = { it.key }) { entry ->
-                        AppTile(
-                            entry = entry,
-                            onClick = { onLaunch(entry) },
-                            onLongClick = { onLongPress(entry) },
-                            iconSize = density.iconSizeDp.dp,
-                            badgeCount = state.notifications.countFor(entry.packageName),
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-        Dock(
-            apps = apps.take(EXPANDED_DOCK_SLOTS),
-            notifications = state.notifications,
-            onLaunch = onLaunch,
-            onLongPress = onLongPress,
-            density = density,
-        )
-        Spacer(Modifier.height(12.dp))
-    }
-}
 
 /**
  * §4.3 Half-open / Tabletop — content above the hinge, controls below it.
@@ -336,10 +186,4 @@ fun BookHome(
     }
 }
 
-/** §4.1 caps the folded dock; Simplified drops a slot to keep 60dp icons clear
- *  of the screen edges. */
-private fun SpaceDensity.compactDockSlots(): Int = if (this == SpaceDensity.Simplified) 3 else 4
-
-private const val EXPANDED_DOCK_SLOTS = 6
 private const val TABLETOP_DOCK_SLOTS = 5
-private const val THREE_COLUMN_WIDTH_DP = 840

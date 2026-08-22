@@ -47,13 +47,18 @@ private enum class DrawerTab(val label: String, val profile: ProfileType?) {
 }
 
 /**
- * §5.3 App Drawer + §5.5 Universal Search.
+ * §5.5 Universal Search.
+ *
+ * This is deliberately *not* an app drawer. Apps live on the home pages now,
+ * so listing them all again here would be a second, competing home for every
+ * app. What it does instead is the thing pages are bad at: finding one app
+ * among several hundred without scrolling.
  *
  * Search matches on a pre-lowercased label (see [AppEntry.searchLabel]) and on
  * the package name, so "設定" and "com.android.settings" both find Settings.
  */
 @Composable
-fun AppDrawer(
+fun AppSearchOverlay(
     apps: List<AppEntry>,
     notifications: NotificationSummary,
     suggested: List<AppEntry>,
@@ -74,16 +79,23 @@ fun AppDrawer(
         DrawerTab.entries.filter { it.profile == null || it.profile in present }
     }
 
-    val visible = remember(apps, query, tab) {
-        val trimmed = query.trim().lowercase()
-        apps.asSequence()
-            .filter { tab.profile == null || it.profile == tab.profile }
-            .filter {
-                trimmed.isEmpty() ||
-                    it.searchLabel.contains(trimmed) ||
-                    it.packageName.contains(trimmed)
-            }
-            .toList()
+    val trimmedQuery = query.trim().lowercase()
+
+    val results = remember(apps, trimmedQuery, tab) {
+        if (trimmedQuery.isEmpty()) {
+            emptyList()
+        } else {
+            apps.asSequence()
+                .filter { tab.profile == null || it.profile == tab.profile }
+                .filter {
+                    it.searchLabel.contains(trimmedQuery) ||
+                        it.packageName.contains(trimmedQuery)
+                }
+                // Prefix matches first: typing "ch" should reach Chrome before
+                // it reaches anything that merely contains "ch".
+                .sortedByDescending { it.searchLabel.startsWith(trimmedQuery) }
+                .toList()
+        }
     }
 
     Column(
@@ -98,12 +110,12 @@ fun AppDrawer(
         SearchField(
             query = query,
             onQueryChange = { query = it },
-            onSubmit = { visible.firstOrNull()?.let(onLaunch) },
+            onSubmit = { results.firstOrNull()?.let(onLaunch) },
         )
 
         Spacer(Modifier.height(12.dp))
 
-        if (availableTabs.size > 1) {
+        if (availableTabs.size > 1 && trimmedQuery.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 availableTabs.forEach { entry ->
                     TabChip(
@@ -118,7 +130,7 @@ fun AppDrawer(
 
         // §5.3 "Suggested apps" — hidden while searching, where it would just
         // push the results the user is aiming at further down.
-        if (query.isBlank() && suggested.isNotEmpty() && tab == DrawerTab.All) {
+        if (trimmedQuery.isEmpty() && suggested.isNotEmpty()) {
             SectionHeader("建議")
             Row(
                 Modifier.fillMaxWidth(),
@@ -142,10 +154,21 @@ fun AppDrawer(
             Spacer(Modifier.height(12.dp))
         }
 
-        if (visible.isEmpty()) {
+        if (trimmedQuery.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = if (query.isBlank()) "沒有可顯示的 App" else "找不到「$query」",
+                    text = "輸入名稱來尋找 App",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textMuted,
+                )
+            }
+            return@Column
+        }
+
+        if (results.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = "找不到「$query」",
                     style = MaterialTheme.typography.bodyMedium,
                     color = tokens.textMuted,
                 )
@@ -153,7 +176,7 @@ fun AppDrawer(
             return@Column
         }
 
-        SectionHeader(if (query.isBlank()) "全部 App · ${visible.size}" else "搜尋結果 · ${visible.size}")
+        SectionHeader("搜尋結果 · ${results.size}")
 
         LazyVerticalGrid(
             columns = GridCells.Adaptive(density.drawerCellDp.dp),
@@ -162,7 +185,7 @@ fun AppDrawer(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
-            items(visible, key = { it.key }) { entry ->
+            items(results, key = { it.key }) { entry ->
                 AppTile(
                     entry = entry,
                     onClick = { onLaunch(entry) },

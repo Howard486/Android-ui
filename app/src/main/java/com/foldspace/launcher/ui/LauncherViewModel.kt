@@ -12,6 +12,9 @@ import com.foldspace.launcher.context.signals.PowerSignalSource
 import com.foldspace.launcher.context.signals.UsageSignalSource
 import com.foldspace.launcher.core.launcher.AppEntry
 import com.foldspace.launcher.core.launcher.ProfileType
+import com.foldspace.launcher.home.HomeItem
+import com.foldspace.launcher.home.HomeLayout
+import com.foldspace.launcher.home.Posture
 import com.foldspace.launcher.notifications.FoldSpaceNotificationListener
 import com.foldspace.launcher.notifications.NotificationRepository
 import com.foldspace.launcher.notifications.NotificationSummary
@@ -23,6 +26,7 @@ import com.foldspace.launcher.settings.ThemeId
 import com.foldspace.launcher.spaces.SpaceConfig
 import com.foldspace.launcher.spaces.SpaceId
 import com.foldspace.launcher.ui.layout.FoldWindowState
+import com.foldspace.launcher.ui.layout.LayoutMode
 import com.foldspace.launcher.ui.theme.MotionLevel
 import com.foldspace.launcher.ui.theme.ThemeTokens
 import com.foldspace.launcher.ui.theme.Themes
@@ -31,8 +35,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
@@ -142,6 +151,27 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LauncherUiState())
 
+    /**
+     * §4 — the posture the layout is keyed on. Tabletop and book both fall
+     * back to the unfolded arrangement: they are transient poses, and giving
+     * each its own saved layout would be four arrangements to keep in step.
+     */
+    private val posture: StateFlow<Posture> = _window
+        .map { if (it.layoutMode == LayoutMode.Compact) Posture.Folded else Posture.Unfolded }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, Posture.Folded)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val homeLayout: StateFlow<HomeLayout> =
+        combine(container.settings.currentSpace, posture) { space, p -> space to p }
+            .distinctUntilChanged()
+            .flatMapLatest { (space, p) -> container.homeLayout.observe(space, p) }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                HomeLayout.empty(SpaceId.General, Posture.Folded),
+            )
+
     private val _drawerOpen = MutableStateFlow(false)
     val drawerOpen: StateFlow<Boolean> = _drawerOpen.asStateFlow()
 
@@ -164,6 +194,29 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             // §7.2 Automatic mode: only user-authored rules reach this.
             container.contextEngine.applySpace.collect(::selectSpace)
+        }
+        viewModelScope.launch {
+            // With no app drawer, an unplaced app is an unreachable app, so
+            // the layout has to follow the installed list rather than being
+            // built once at install time.
+            container.launcherApps.apps
+                .filter { it.isNotEmpty() }
+                .collect { apps ->
+                    for (space in SpaceId.entries) {
+                        container.homeLayout.seedIfEmpty(space, Posture.Folded, apps)
+                    }
+                    container.homeLayout.syncInstalled(apps)
+                }
+        }
+        viewModelScope.launch {
+            // The unfolded arrangement is created from the folded one the
+            // first time the device is opened, then never re-synced (§4.2).
+            posture.collect { current ->
+                if (current != Posture.Unfolded) return@collect
+                for (space in SpaceId.entries) {
+                    container.homeLayout.seedPostureFrom(space, Posture.Folded, Posture.Unfolded)
+                }
+            }
         }
     }
 
@@ -227,6 +280,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun launch(entry: AppEntry) {
         container.launcherApps.launch(entry)
+    }
+
+    fun launch(item: HomeItem) {
+        item.app?.let(::launch)
+    }
+
+    fun onHomeItemLongPress(item: HomeItem) {
+        item.app?.let(::openAppInfo)
+    }
+
+    /** 簡易 — the user picks exactly which four apps appear. */
+    fun setSimpleApps(apps: List<AppEntry>) = viewModelScope.launch {
+        container.homeLayout.setSimpleApps(apps)
     }
 
     fun openAppInfo(entry: AppEntry) {
