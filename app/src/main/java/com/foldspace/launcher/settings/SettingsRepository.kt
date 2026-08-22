@@ -96,7 +96,12 @@ class SettingsRepository(
         prefs[Keys.pinnedFor(space)] = keys.joinToString(RECORD_SEPARATOR)
     }
 
-    private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
+    // Must be declared `suspend` to match DataStore's transform type: Kotlin's
+    // suspend conversion applies to lambda literals, not to a value of a
+    // plain function type being passed through.
+    private suspend fun edit(
+        block: suspend (androidx.datastore.preferences.core.MutablePreferences) -> Unit,
+    ) {
         context.dataStore.edit(block)
     }
 

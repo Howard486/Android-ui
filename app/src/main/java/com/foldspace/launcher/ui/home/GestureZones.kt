@@ -1,5 +1,6 @@
 package com.foldspace.launcher.ui.home
 
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -74,7 +75,7 @@ fun Modifier.spaceSwipeGestures(
     onPrevious: () -> Unit,
 ): Modifier = if (!enabled) this else this.pointerInput(Unit) {
     var totalDrag = 0f
-    androidx.compose.foundation.gestures.detectHorizontalDragGestures(
+    detectHorizontalDragGestures(
         onDragStart = { totalDrag = 0f },
         onDragEnd = {
             when {

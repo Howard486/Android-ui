@@ -28,17 +28,17 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Unit tests
-        run: ./gradlew testDebugUnitTest --stacktrace
+        run: ./gradlew testDebugUnitTest
 
       - name: Lint
-        run: ./gradlew lintDebug --stacktrace
+        run: ./gradlew lintDebug
         continue-on-error: true
 
       - name: Assemble debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleDebug
 
       - name: Assemble release APK
-        run: ./gradlew assembleRelease --stacktrace
+        run: ./gradlew assembleRelease
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
