@@ -120,9 +120,9 @@ class HomeLayoutRepository(
         // Both postures share the arrangement here: four apps and a clock look
         // the same either way, so keeping two copies would only be two things
         // to get out of step.
-        dao.replaceLayout(SpaceId.Simple, Posture.Folded.key, entities)
+        dao.replaceLayout(SpaceId.Simple.key, Posture.Folded.key, entities)
         dao.replaceLayout(
-            SpaceId.Simple,
+            SpaceId.Simple.key,
             Posture.Unfolded.key,
             entities.map { it.copy(id = 0, postureKey = Posture.Unfolded.key) },
         )
