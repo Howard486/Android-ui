@@ -36,7 +36,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -161,6 +163,7 @@ fun PagedHome(
                         onLongPress = onLongPress,
                         onOpenFolder = onOpenFolder,
                         onLongPressEmpty = onLongPressEmpty,
+                        onMove = onMove,
                         onResizeWidget = onResizeWidget,
                         onRemoveItem = onRemoveItem,
                         onCellMeasured = onCellMeasured,
@@ -242,6 +245,7 @@ private fun CellGrid(
     onLongPress: (HomeItem) -> Unit,
     onOpenFolder: (HomeItem) -> Unit,
     onLongPressEmpty: (page: Int, cellX: Int, cellY: Int) -> Unit,
+    onMove: (item: HomeItem, page: Int, cellX: Int, cellY: Int) -> Unit,
     onResizeWidget: (item: HomeItem, spanX: Int, spanY: Int) -> Unit,
     onRemoveItem: (HomeItem) -> Unit,
     onCellMeasured: (widthDp: Int, heightDp: Int) -> Unit,
@@ -250,6 +254,10 @@ private fun CellGrid(
 ) {
     var gridSize by remember { mutableStateOf(IntSize.Zero) }
     val localDensity = LocalDensity.current
+    // VIBRATE has been in the manifest since V0.1 and was never once used, so
+    // picking up an icon has always been silent.
+    val haptics = LocalHapticFeedback.current
+    val hapticsEnabled = LocalHapticsEnabled.current
     val activeDrag = drag?.takeIf { it.targetPage == pageIndex }
 
     // The span a handle is currently being dragged to, so the widget resizes
@@ -316,6 +324,9 @@ private fun CellGrid(
                 // A span-aware lookup: pressing anywhere under a widget finds
                 // the widget, not just its top-left cell.
                 val item = cell?.let { (x, y) -> page.occupantAt(x, y) }
+                if (hapticsEnabled && (item != null || cell != null)) {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                }
                 when {
                     // Long-pressing an icon picks it up. Doing so outside
                     // edit mode is what people expect, so it enters edit
@@ -433,6 +444,15 @@ private fun CellGrid(
                         onCommitSpan = {
                             val (x, y) = spanOf(item)
                             if (x != item.spanX || y != item.spanY) onResizeWidget(item, x, y)
+                        },
+                        onMoveBy = { stepX, stepY ->
+                            val targetX = (item.cellX + stepX)
+                                .coerceIn(0, layout.grid.columns - spanX)
+                            val targetY = (item.cellY + stepY)
+                                .coerceIn(0, layout.grid.rows - spanY)
+                            if (targetX != item.cellX || targetY != item.cellY) {
+                                onMove(item, page.index, targetX, targetY)
+                            }
                         },
                         onRemove = { onRemoveItem(item) },
                     )

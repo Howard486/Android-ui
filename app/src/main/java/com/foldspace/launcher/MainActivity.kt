@@ -77,6 +77,36 @@ class MainActivity : ComponentActivity() {
             viewModel.onWidgetConfigureResult(id, info, result.resultCode == Activity.RESULT_OK)
         }
 
+    /**
+     * §16 — backup goes through the Storage Access Framework, so FoldSpace
+     * needs no storage permission at all and the user picks exactly where the
+     * file lands.
+     */
+    private val exportRequest =
+        registerForActivityResult(ActivityResultContracts.CreateDocument(BACKUP_MIME)) { uri ->
+            if (uri == null) return@registerForActivityResult
+            lifecycleScope.launch {
+                val text = viewModel.exportLayoutText()
+                val written = runCatching {
+                    contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
+                }.isSuccess
+                viewModel.reportBackupResult(written)
+            }
+        }
+
+    private val importRequest =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri == null) return@registerForActivityResult
+            val text = runCatching {
+                contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()
+            if (text == null) {
+                viewModel.reportBackupResult(false)
+            } else {
+                viewModel.importLayoutText(text)
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -114,6 +144,8 @@ class MainActivity : ComponentActivity() {
                     onExpandStatusBar = ::expandStatusBar,
                     onOpenLink = ::openLink,
                     onOpenPackage = ::openPackage,
+                    onExportLayout = ::exportLayout,
+                    onImportLayout = ::importLayout,
                 )
             }
         }
@@ -189,6 +221,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun exportLayout() {
+        runCatching { exportRequest.launch(defaultBackupName()) }
+    }
+
+    private fun importLayout() {
+        // Every mime type: some file managers hand back application/octet-stream
+        // for an unknown extension, and refusing our own file would be absurd.
+        runCatching { importRequest.launch(arrayOf("*/*")) }
+    }
+
+    private fun defaultBackupName(): String {
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.US)
+            .format(java.util.Date())
+        return "foldspace-layout-" + stamp + ".txt"
+    }
+
     /** Opens a feed story in whatever the user's browser is. */
     private fun openLink(url: String) {
         runCatching {
@@ -238,5 +286,9 @@ class MainActivity : ComponentActivity() {
                 method.invoke(service)
             }
         }
+    }
+
+    private companion object {
+        const val BACKUP_MIME = "text/plain"
     }
 }

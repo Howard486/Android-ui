@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.foldspace.launcher.AppContainer
 import com.foldspace.launcher.appContainer
 import com.foldspace.launcher.context.ContextEvent
+import com.foldspace.launcher.context.AutomationRule
 import com.foldspace.launcher.context.SpaceSuggestion
 import com.foldspace.launcher.context.signals.BluetoothSignalSource
 import com.foldspace.launcher.context.signals.PowerSignalSource
@@ -16,8 +17,14 @@ import com.foldspace.launcher.core.launcher.ProfileType
 import com.foldspace.launcher.feed.FeedState
 import com.foldspace.launcher.home.AppCategory
 import com.foldspace.launcher.home.HomeItem
+import com.foldspace.launcher.home.GridSpec
 import com.foldspace.launcher.home.HomeLayout
 import com.foldspace.launcher.home.HomeSurface
+import com.foldspace.launcher.home.LayoutBackup
+import com.foldspace.launcher.home.LayoutBackupCodec
+import com.foldspace.launcher.pairs.AppPair
+import com.foldspace.launcher.ui.icons.IconPackInfo
+import com.foldspace.launcher.ui.icons.LoadedIconPack
 import com.foldspace.launcher.home.PageKind
 import com.foldspace.launcher.home.Posture
 import com.foldspace.launcher.work.WorkItemsDeriver
@@ -223,6 +230,110 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         .map(WorkItemsDeriver::derive)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WorkItemsState())
 
+    /**
+     * 簡易's arrangement, observed independently of the current context — the
+     * picker is reached from settings, which the user may open from any 情境.
+     */
+    private val simpleLayout: StateFlow<HomeLayout> =
+        container.homeLayout.observe(SpaceId.Simple, Posture.Folded, GridChoice.Ios)
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                HomeLayout.empty(SpaceId.Simple, Posture.Folded),
+            )
+
+    /** How many slots 簡易 has. */
+    val simpleSlots: Int get() = GridSpec.Simple.cellsPerPage
+
+    // ---- Icon packs ----
+
+    private val _iconPack = MutableStateFlow<LoadedIconPack?>(null)
+    val iconPack: StateFlow<LoadedIconPack?> = _iconPack.asStateFlow()
+
+    fun installedIconPacks(): List<IconPackInfo> = container.iconPacks.installed()
+
+    fun setIconPack(packageName: String?) = viewModelScope.launch {
+        container.settings.setIconPack(packageName)
+    }
+
+    // ---- Automation rules (§7.1 level 2) ----
+
+    fun saveRule(rule: AutomationRule) = viewModelScope.launch {
+        val current = state.value.settings.automationRules.filterNot { it.id == rule.id }
+        container.settings.setAutomationRules(current + rule)
+    }
+
+    fun deleteRule(id: String) = viewModelScope.launch {
+        container.settings.setAutomationRules(
+            state.value.settings.automationRules.filterNot { it.id == id },
+        )
+    }
+
+    fun setRuleEnabled(id: String, enabled: Boolean) = viewModelScope.launch {
+        container.settings.setAutomationRules(
+            state.value.settings.automationRules.map {
+                if (it.id == id) it.copy(enabled = enabled) else it
+            },
+        )
+    }
+
+    fun setHapticsEnabled(enabled: Boolean) = viewModelScope.launch {
+        container.settings.setHapticsEnabled(enabled)
+    }
+
+    // ---- App pairs ----
+
+    fun savePair(pair: AppPair) = viewModelScope.launch {
+        val current = state.value.settings.appPairs.filterNot { it.id == pair.id }
+        container.settings.setAppPairs(current + pair)
+    }
+
+    fun deletePair(id: String) = viewModelScope.launch {
+        container.settings.setAppPairs(state.value.settings.appPairs.filterNot { it.id == id })
+    }
+
+    /**
+     * Opens a pair. Whether the two land side by side is the system's call —
+     * see [com.foldspace.launcher.pairs.SplitLauncher] for why a third-party
+     * launcher cannot force it.
+     */
+    fun launchPair(pair: AppPair) {
+        if (!container.splitLauncher.launch(pair, state.value.apps)) {
+            _transientMessage.value = "配對中有 App 已移除，請重新設定"
+        }
+    }
+
+    fun splitSupport(): com.foldspace.launcher.pairs.SplitLauncher.Support =
+        container.splitLauncher.support(state.value.window.layoutMode != LayoutMode.Compact)
+
+    // ---- Backup and restore ----
+
+    private val _transientMessage = MutableStateFlow<String?>(null)
+    val transientMessage: StateFlow<String?> = _transientMessage.asStateFlow()
+
+    fun dismissTransientMessage() {
+        _transientMessage.value = null
+    }
+
+    /** The file's whole contents, for the Activity to write through the SAF. */
+    suspend fun exportLayoutText(): String =
+        LayoutBackupCodec.encode(container.homeLayout.exportLayout())
+
+    /** The Activity owns the file I/O; only it knows whether the write landed. */
+    fun reportBackupResult(succeeded: Boolean) {
+        _transientMessage.value = if (succeeded) "已匯出桌面備份" else "無法讀寫這個檔案"
+    }
+
+    fun importLayoutText(raw: String) = viewModelScope.launch {
+        val backup: LayoutBackup? = LayoutBackupCodec.decode(raw)
+        if (backup == null) {
+            _transientMessage.value = "這不是 FoldSpace 的備份檔"
+            return@launch
+        }
+        val outcome = container.homeLayout.importLayout(backup, state.value.apps)
+        _transientMessage.value = outcome.describe()
+    }
+
     // ---- Widgets (phase 4) ----
 
     private val _widgetPickerOpen = MutableStateFlow(false)
@@ -279,6 +390,27 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _settingsOpen = MutableStateFlow(false)
     val settingsOpen: StateFlow<Boolean> = _settingsOpen.asStateFlow()
 
+    /** One enum instead of four booleans: only one of these is ever open. */
+    enum class Sheet { Rules, SimpleApps, Pairs, IconPack }
+
+    private val _sheet = MutableStateFlow<Sheet?>(null)
+    val sheet: StateFlow<Sheet?> = _sheet.asStateFlow()
+
+    fun openSheet(value: Sheet) {
+        _settingsOpen.value = false
+        _sheet.value = value
+    }
+
+    fun closeSheet() {
+        _sheet.value = null
+    }
+
+    /** The apps 簡易 currently shows, for the picker to start from. */
+    fun simpleApps(): List<AppEntry> = simpleLayout.value.pages
+        .flatMap { it.items }
+        .sortedWith(compareBy({ it.cellY }, { it.cellX }))
+        .mapNotNull { it.app }
+
     init {
         container.launcherApps.start()
         powerSignals.start()
@@ -287,7 +419,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             container.settings.settings.collect { settings ->
                 container.contextEngine.setSwitchMode(settings.switchMode)
+                // §7.1 level 2 was dead code: the engine was constructed with
+                // an empty rule list and nothing ever filled it, so the one
+                // level allowed to switch a Space outright could never fire.
+                container.ruleEngine.rules = settings.automationRules
             }
+        }
+        viewModelScope.launch {
+            // Loading a pack parses its appfilter, so it happens once per
+            // choice rather than per icon.
+            container.settings.settings
+                .map { it.iconPackPackage }
+                .distinctUntilChanged()
+                .collect { packageName ->
+                    _iconPack.value = packageName?.let(container.iconPacks::load)
+                }
         }
         viewModelScope.launch {
             // §7.2 Automatic mode: only user-authored rules reach this.

@@ -311,6 +311,170 @@ class HomeLayoutRepository(
     suspend fun removePage(surface: HomeSurface, posture: Posture, pageIndex: Int) =
         pageDao.delete(surface.key, posture.key, pageIndex)
 
+    // ---- Backup and restore ----
+
+    /**
+     * The whole arrangement as a portable snapshot.
+     *
+     * Motivated by this project's own history: destructive schema migrations
+     * have already wiped the user's layout twice, and there was no way back.
+     */
+    suspend fun exportLayout(): LayoutBackup {
+        val items = mutableListOf<BackupItem>()
+        val pages = mutableListOf<BackupPage>()
+
+        for (surface in HomeSurface.entries) {
+            for (posture in Posture.entries) {
+                val rows = dao.getLayout(surface.key, posture.key)
+                val foldersById = rows
+                    .filter { it.itemType == HomeItemType.Folder.key }
+                    .associateBy { it.id }
+
+                rows.forEach { row ->
+                    // A widget's id binds this device's host to one provider
+                    // instance; the number means nothing anywhere else.
+                    if (row.itemType == HomeItemType.Widget.key) return@forEach
+                    items += BackupItem(
+                        surface = surface.key,
+                        posture = posture.key,
+                        pageIndex = row.pageIndex,
+                        cellX = row.cellX,
+                        cellY = row.cellY,
+                        spanX = row.spanX,
+                        spanY = row.spanY,
+                        type = row.itemType,
+                        packageName = row.packageName,
+                        className = row.className,
+                        folderTitle = row.folderTitle,
+                        inFolder = foldersById[row.container]?.folderTitle,
+                    )
+                }
+
+                pageDao.getPages(surface.key, posture.key).forEach { page ->
+                    pages += BackupPage(
+                        surface = page.surfaceKey,
+                        posture = page.postureKey,
+                        pageIndex = page.pageIndex,
+                        kind = page.kind,
+                        contexts = page.contexts,
+                    )
+                }
+            }
+        }
+        return LayoutBackup(items = items, pages = pages)
+    }
+
+    /**
+     * Replaces the arrangement with a backup's.
+     *
+     * Apps that are not installed here are skipped rather than restored as
+     * dead cells: a restored layout full of holes the user cannot fill is
+     * worse than a smaller one that works. The count is reported instead.
+     */
+    suspend fun importLayout(backup: LayoutBackup, installed: List<AppEntry>): RestoreOutcome {
+        val byComponent = installed.associateBy { it.packageName to it.className }
+        val byPackage = installed.groupBy { it.packageName }
+
+        var restored = 0
+        var missing = 0
+
+        for (surface in HomeSurface.entries) {
+            for (posture in Posture.entries) {
+                val scoped = backup.items.filter {
+                    it.surface == surface.key && it.posture == posture.key
+                }
+                if (scoped.isEmpty()) continue
+
+                dao.clearLayout(surface.key, posture.key)
+                pageDao.clear(surface.key, posture.key)
+
+                // Folders first: a member needs its container's real id, and
+                // that only exists once the folder row is written.
+                val folderIds = mutableMapOf<String, Long>()
+                scoped.filter { it.type == HomeItemType.Folder.key }.forEach { item ->
+                    val title = item.folderTitle ?: return@forEach
+                    val id = dao.insert(
+                        HomeItemEntity(
+                            surfaceKey = surface.key,
+                            postureKey = posture.key,
+                            pageIndex = item.pageIndex,
+                            cellX = item.cellX,
+                            cellY = item.cellY,
+                            itemType = HomeItemType.Folder.key,
+                            folderTitle = title,
+                        ),
+                    )
+                    folderIds[title] = id
+                    restored++
+                }
+
+                val folderSlot = mutableMapOf<Long, Int>()
+                scoped.filter { it.type == HomeItemType.App.key }.forEach { item ->
+                    val packageName = item.packageName ?: return@forEach
+                    val app = byComponent[packageName to item.className.orEmpty()]
+                        ?: byPackage[packageName]?.firstOrNull()
+                    if (app == null) {
+                        missing++
+                        return@forEach
+                    }
+
+                    val container = item.inFolder?.let(folderIds::get)
+                        ?: HomeItemEntity.CONTAINER_DESKTOP
+                    // Folder members live off-page, and their slot number is
+                    // their cellX — the unique index counts `container`, so
+                    // siblings must not share a cell.
+                    val slot = if (container == HomeItemEntity.CONTAINER_DESKTOP) {
+                        null
+                    } else {
+                        (folderSlot[container] ?: 0).also { folderSlot[container] = it + 1 }
+                    }
+
+                    dao.insert(
+                        HomeItemEntity(
+                            surfaceKey = surface.key,
+                            postureKey = posture.key,
+                            container = container,
+                            pageIndex = if (slot == null) item.pageIndex else HomeItemDao.PARK_PAGE,
+                            cellX = slot ?: item.cellX,
+                            cellY = if (slot == null) item.cellY else 0,
+                            spanX = item.spanX,
+                            spanY = item.spanY,
+                            sortOrder = slot ?: 0,
+                            itemType = HomeItemType.App.key,
+                            packageName = packageName,
+                            className = app.className,
+                            userSerial = app.key.substringAfterLast('#').toLongOrNull(),
+                        ),
+                    )
+                    restored++
+                }
+
+                backup.pages
+                    .filter { it.surface == surface.key && it.posture == posture.key }
+                    .forEach { page ->
+                        pageDao.upsert(
+                            HomePageEntity(
+                                surfaceKey = page.surface,
+                                postureKey = page.posture,
+                                pageIndex = page.pageIndex,
+                                kind = page.kind,
+                                contexts = page.contexts,
+                            ),
+                        )
+                    }
+            }
+        }
+
+        // The undo snapshot belongs to a layout that no longer exists.
+        undoSnapshot = null
+
+        return RestoreOutcome(
+            itemsRestored = restored,
+            appsMissing = missing,
+            widgetsDropped = 0,
+        )
+    }
+
     // ---- One-tap organise ----
 
     /**

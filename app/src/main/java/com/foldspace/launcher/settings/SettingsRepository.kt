@@ -8,7 +8,11 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.foldspace.launcher.context.AutomationRule
+import com.foldspace.launcher.context.AutomationRuleCodec
 import com.foldspace.launcher.context.SwitchMode
+import com.foldspace.launcher.pairs.AppPair
+import com.foldspace.launcher.pairs.AppPairCodec
 import com.foldspace.launcher.spaces.SpaceId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -68,6 +72,14 @@ data class FoldSpaceSettings(
     val powerMode: PowerMode = PowerMode.Smart,
     val themeId: ThemeId = ThemeId.Minimal,
     val gridChoice: GridChoice = GridChoice.Ios,
+    /** §7.1 level 2 — the only rules allowed to switch a Space outright. */
+    val automationRules: List<AutomationRule> = emptyList(),
+    /** Off is a real preference, not just a power setting; on by default. */
+    val hapticsEnabled: Boolean = true,
+    /** Package of the installed icon pack, or null for the system icons. */
+    val iconPackPackage: String? = null,
+    /** Saved two-app pairs, as encoded by [AppPairCodec]. */
+    val appPairs: List<AppPair> = emptyList(),
     /** §6.1 — on by default on Samsung hardware, and never silently disabled. */
     val samsungWalletCompatibility: Boolean = true,
     val notificationContentAnalysis: Boolean = true,
@@ -107,6 +119,25 @@ class SettingsRepository(
 
     suspend fun setGridChoice(choice: GridChoice) = edit { it[Keys.Grid] = choice.key }
 
+    suspend fun setAutomationRules(rules: List<AutomationRule>) = edit {
+        it[Keys.Rules] = AutomationRuleCodec.encodeAll(rules)
+    }
+
+    suspend fun setHapticsEnabled(enabled: Boolean) = edit { it[Keys.Haptics] = enabled }
+
+    /** Null clears the pack and goes back to the system's own icons. */
+    suspend fun setIconPack(packageName: String?) = edit { prefs ->
+        if (packageName.isNullOrBlank()) {
+            prefs.remove(Keys.IconPack)
+        } else {
+            prefs[Keys.IconPack] = packageName
+        }
+    }
+
+    suspend fun setAppPairs(pairs: List<AppPair>) = edit {
+        it[Keys.AppPairs] = AppPairCodec.encodeAll(pairs)
+    }
+
     suspend fun setSamsungWalletCompatibility(enabled: Boolean) =
         edit { it[Keys.SamsungWallet] = enabled }
 
@@ -144,6 +175,10 @@ class SettingsRepository(
             ?: PowerMode.Smart,
         themeId = ThemeId.fromKey(prefs[Keys.Theme]),
         gridChoice = GridChoice.fromKey(prefs[Keys.Grid]),
+        automationRules = AutomationRuleCodec.decodeAll(prefs[Keys.Rules].orEmpty()),
+        hapticsEnabled = prefs[Keys.Haptics] ?: true,
+        iconPackPackage = prefs[Keys.IconPack]?.takeIf { it.isNotBlank() },
+        appPairs = AppPairCodec.decodeAll(prefs[Keys.AppPairs].orEmpty()),
         samsungWalletCompatibility = prefs[Keys.SamsungWallet] ?: true,
         notificationContentAnalysis = prefs[Keys.ContentAnalysis] ?: true,
         excludedNotificationPackages = prefs[Keys.ExcludedPackages].orEmpty(),
@@ -162,6 +197,10 @@ class SettingsRepository(
         val PowerMode = stringPreferencesKey("power_mode")
         val Theme = stringPreferencesKey("theme")
         val Grid = stringPreferencesKey("grid_choice")
+        val Rules = stringSetPreferencesKey("automation_rules")
+        val Haptics = booleanPreferencesKey("haptics_enabled")
+        val IconPack = stringPreferencesKey("icon_pack")
+        val AppPairs = stringSetPreferencesKey("app_pairs")
         val SamsungWallet = booleanPreferencesKey("samsung_wallet_compat")
         val ContentAnalysis = booleanPreferencesKey("notification_content_analysis")
         val ExcludedPackages = stringSetPreferencesKey("excluded_notification_packages")

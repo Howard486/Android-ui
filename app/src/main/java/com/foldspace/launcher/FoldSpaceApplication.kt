@@ -13,6 +13,8 @@ import com.foldspace.launcher.feed.GoogleOverlayFeedProvider
 import com.foldspace.launcher.home.AppCategorizer
 import com.foldspace.launcher.home.HomeLayoutRepository
 import com.foldspace.launcher.home.db.FoldSpaceDatabase
+import com.foldspace.launcher.pairs.SplitLauncher
+import com.foldspace.launcher.ui.icons.IconPackRepository
 import com.foldspace.launcher.widgets.WidgetHostController
 import com.foldspace.launcher.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -80,11 +82,24 @@ class AppContainer(context: Context) {
      */
     val nano: NanoAdapter = NanoAdapter.Unsupported
 
+    /**
+     * Held rather than inlined so the ViewModel can keep its rules in step
+     * with the user's. It used to be constructed anonymously with an empty
+     * list, which made §7.1 level 2 unreachable.
+     */
+    val ruleEngine = RuleEngine()
+
     val contextEngine = ContextEngine(
         scope = appScope,
-        ruleEngine = RuleEngine(),
+        ruleEngine = ruleEngine,
         nano = nano,
     )
+
+    /** Third-party icon packs, in the de-facto ADW/Nova format. */
+    val iconPacks = IconPackRepository(context)
+
+    /** §4 — two apps side by side, as far as the platform permits. */
+    val splitLauncher = SplitLauncher(context, launcherApps)
 }
 
 /** Convenience accessor; every call site already holds a Context. */

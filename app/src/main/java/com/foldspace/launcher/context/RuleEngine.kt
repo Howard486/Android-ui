@@ -67,16 +67,59 @@ data class RuleMatcher(
         bluetoothClass?.let { if (snapshot.bluetoothClass != it) return false }
         calendarCategory?.let { if (!snapshot.calendarCategory.equals(it, ignoreCase = true)) return false }
         // An all-empty matcher would fire on everything; treat it as inert.
-        return timeBuckets.isNotEmpty() || charging != null ||
-            bluetoothClass != null || calendarCategory != null
+        return hasAnyCondition()
     }
+
+    /**
+     * Whether this matcher constrains anything at all.
+     *
+     * `weekdayOnly` alone does not count: on its own it would fire every
+     * weekday, all day, which is not a rule anyone means to write.
+     */
+    fun hasAnyCondition(): Boolean = timeBuckets.isNotEmpty() || charging != null ||
+        bluetoothClass != null || calendarCategory != null
+
+    /** The rule's condition in the user's words, for the editor. */
+    fun describe(): String {
+        val parts = mutableListOf<String>()
+        if (timeBuckets.isNotEmpty()) {
+            parts += timeBuckets.sortedBy { it.ordinal }.joinToString("、") { it.label() }
+        }
+        if (weekdayOnly) parts += "平日"
+        charging?.let { parts += if (it) "充電中" else "未充電" }
+        bluetoothClass?.let { parts += it.label() }
+        calendarCategory?.let { parts += "行事曆：" + it }
+        return if (parts.isEmpty()) "（沒有條件）" else parts.joinToString(" · ")
+    }
+}
+
+/** Display names for the rule editor. */
+fun TimeBucket.label(): String = when (this) {
+    TimeBucket.EarlyMorning -> "清晨"
+    TimeBucket.Morning -> "上午"
+    TimeBucket.Afternoon -> "下午"
+    TimeBucket.Evening -> "傍晚"
+    TimeBucket.Night -> "夜間"
+}
+
+fun BluetoothClass.label(): String = when (this) {
+    BluetoothClass.None -> "未連線藍牙"
+    BluetoothClass.Audio -> "連上耳機"
+    BluetoothClass.Car -> "連上車用裝置"
+    BluetoothClass.Wearable -> "連上穿戴裝置"
+    BluetoothClass.Other -> "連上其他藍牙裝置"
 }
 
 /**
  * §7 Rule Engine. Deterministic, cheap, and always consulted before the AI —
  * "規則能解決，不跑 AI" (§1.2 rule 2).
+ *
+ * [rules] is a var because the user edits them at runtime. It used to be
+ * constructor-only, and the app built the engine with an empty list — so
+ * §7.1 level 2, the one level allowed to switch a Space outright, could never
+ * fire at all.
  */
-class RuleEngine(private val rules: List<AutomationRule> = emptyList()) {
+class RuleEngine(@Volatile var rules: List<AutomationRule> = emptyList()) {
 
     fun evaluate(snapshot: ContextSnapshot, switchMode: SwitchMode): ContextDecision {
         // Level 2 — explicit user automation. Allowed to apply directly, but

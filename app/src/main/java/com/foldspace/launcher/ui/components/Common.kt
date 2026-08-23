@@ -31,7 +31,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.MaterialTheme
 import com.foldspace.launcher.core.launcher.AppEntry
+import android.content.ComponentName
 import com.foldspace.launcher.ui.icons.IconShaper
+import com.foldspace.launcher.ui.icons.LocalIconPack
 import com.foldspace.launcher.ui.icons.Squircle
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 
@@ -139,11 +141,19 @@ fun AppIcon(entry: AppEntry, size: Dp) {
     // before, let adaptive icons show their full background bleed and let
     // legacy icons keep whatever silhouette their author chose — the reason
     // a full page of them never lined up.
-    val bitmap = remember(entry.key, pxSize, tokens.surfaceElevated) {
+    // A pack supplies artwork; it never decides shape. Whatever comes back
+    // still goes through IconShaper, so a pack whose own icons are square,
+    // round and teardrop-shaped in the same set still lands as one uniform
+    // grid.
+    val pack = LocalIconPack.current
+    val bitmap = remember(entry.key, pxSize, tokens.surfaceElevated, pack) {
+        val packed = pack?.iconFor(ComponentName(entry.packageName, entry.className))
         IconShaper.render(
-            drawable = entry.icon,
+            drawable = packed ?: entry.icon,
             sizePx = pxSize,
-            key = entry.key,
+            // The pack is part of the key, or switching packs would keep
+            // serving the previous one's art out of the cache.
+            key = entry.key + "@" + (pack?.packageName ?: "system"),
             tile = tokens.surfaceElevated,
         )
     }

@@ -44,6 +44,13 @@ fun SettingsScreen(
     nanoAvailability: NanoUnavailableReason,
     onSetTheme: (ThemeId) -> Unit,
     onSetGridChoice: (GridChoice) -> Unit,
+    onSetHaptics: (Boolean) -> Unit,
+    onEditRules: () -> Unit,
+    onPickSimpleApps: () -> Unit,
+    onEditPairs: () -> Unit,
+    onPickIconPack: () -> Unit,
+    onExportLayout: () -> Unit,
+    onImportLayout: () -> Unit,
     onSetPowerMode: (PowerMode) -> Unit,
     onSetSwitchMode: (SwitchMode) -> Unit,
     onSetWalletCompatibility: (Boolean) -> Unit,
@@ -151,7 +158,136 @@ fun SettingsScreen(
                     color = tokens.accent,
                     modifier = Modifier.clickable(onClick = onAddWidgetPage).padding(vertical = 4.dp),
                 )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "選擇簡易模式的 App",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tokens.accent,
+                    modifier = Modifier.clickable(onClick = onPickSimpleApps).padding(vertical = 4.dp),
+                )
             }
+        }
+
+        // Backup. Prompted by this project's own history: two destructive
+        // schema migrations have already taken the user's arrangement with
+        // them, and there was no way back.
+        item {
+            FoldCard(Modifier.fillMaxWidth()) {
+                Text(
+                    text = "備份桌面",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.textPrimary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "把排列存成檔案，換機或升級後再匯回來。小工具不包含在內 —— " +
+                        "它的編號只對這台裝置有意義，還原時要重新新增。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                )
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    Text(
+                        text = "匯出",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = tokens.accent,
+                        modifier = Modifier.clickable(onClick = onExportLayout).padding(vertical = 4.dp),
+                    )
+                    Text(
+                        text = "匯入",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = tokens.accent,
+                        modifier = Modifier.clickable(onClick = onImportLayout).padding(vertical = 4.dp),
+                    )
+                }
+            }
+        }
+
+        // §7.1 level 2. Reachable at last.
+        item {
+            FoldCard(Modifier.fillMaxWidth()) {
+                Text(
+                    text = "自動切換規則",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.textPrimary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = if (state.settings.automationRules.isEmpty()) {
+                        "還沒有規則。規則是唯一可以直接切換情境的東西，其他訊號只會提示。"
+                    } else {
+                        "已設定 " + state.settings.automationRules.size + " 條規則。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                )
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    text = "編輯規則",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tokens.accent,
+                    modifier = Modifier.clickable(onClick = onEditRules).padding(vertical = 4.dp),
+                )
+            }
+        }
+
+        // §4 — the foldable feature this launcher exists for.
+        item {
+            FoldCard(Modifier.fillMaxWidth()) {
+                Text(
+                    text = "App 配對",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.textPrimary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "一次開兩個 App。能不能真的左右並排由系統決定 —— " +
+                        "Android 沒有給第三方 Launcher 開分割畫面的公開 API，" +
+                        "已在分割模式時會並排，否則第二個會蓋住第一個。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                )
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    text = "編輯配對",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tokens.accent,
+                    modifier = Modifier.clickable(onClick = onEditPairs).padding(vertical = 4.dp),
+                )
+            }
+        }
+
+        item {
+            FoldCard(Modifier.fillMaxWidth()) {
+                Text(
+                    text = "圖示包",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.textPrimary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = (state.settings.iconPackPackage?.let { "已套用：" + it } ?: "使用系統圖示") +
+                        "。圖示包只提供圖案，形狀仍由 FoldSpace 統一。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                )
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    text = "選擇圖示包",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tokens.accent,
+                    modifier = Modifier.clickable(onClick = onPickIconPack).padding(vertical = 4.dp),
+                )
+            }
+        }
+
+        item {
+            ToggleCard(
+                title = "觸覺回饋",
+                description = "拿起圖示、調整小工具大小、進出編輯模式時的細微震動。",
+                checked = state.settings.hapticsEnabled,
+                onCheckedChange = onSetHaptics,
+            )
         }
 
         // §6.1 Samsung Compatibility Mode.

@@ -28,6 +28,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -48,6 +49,12 @@ import com.foldspace.launcher.ui.widgets.WidgetPicker
 import com.foldspace.launcher.ui.work.WorkItemsPage
 import com.foldspace.launcher.ui.drawer.AppSearchOverlay
 import com.foldspace.launcher.ui.home.AppLibraryPage
+import com.foldspace.launcher.ui.home.LocalHapticsEnabled
+import com.foldspace.launcher.ui.home.SimpleAppPicker
+import com.foldspace.launcher.ui.icons.IconPackPicker
+import com.foldspace.launcher.ui.icons.LocalIconPack
+import com.foldspace.launcher.ui.pairs.PairEditor
+import com.foldspace.launcher.ui.rules.RuleEditor
 import com.foldspace.launcher.ui.home.BookHome
 import com.foldspace.launcher.ui.home.HomeDock
 import com.foldspace.launcher.ui.home.PagedHome
@@ -84,6 +91,8 @@ fun FoldSpaceRoot(
     onExpandStatusBar: () -> Unit,
     onOpenLink: (String) -> Unit,
     onOpenPackage: (String) -> Unit,
+    onExportLayout: () -> Unit,
+    onImportLayout: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val drawerOpen by viewModel.drawerOpen.collectAsStateWithLifecycle()
@@ -97,6 +106,9 @@ fun FoldSpaceRoot(
     val organiseMessage by viewModel.organiseMessage.collectAsStateWithLifecycle()
     val widgetPickerOpen by viewModel.widgetPickerOpen.collectAsStateWithLifecycle()
     val appCategories by viewModel.appCategories.collectAsStateWithLifecycle()
+    val sheet by viewModel.sheet.collectAsStateWithLifecycle()
+    val iconPack by viewModel.iconPack.collectAsStateWithLifecycle()
+    val transientMessage by viewModel.transientMessage.collectAsStateWithLifecycle()
 
     val openFolder = remember(openFolderId, homeLayout) {
         openFolderId?.let { id ->
@@ -121,7 +133,7 @@ fun FoldSpaceRoot(
     val bodyPadding = PaddingValues(bottom = systemPadding.calculateBottomPadding())
 
     val anyOverlayOpen = drawerOpen || notificationCenterOpen || settingsOpen ||
-        openFolder != null || widgetPickerOpen
+        openFolder != null || widgetPickerOpen || sheet != null
 
     // Back on a launcher means "close whatever is open", never "leave".
     BackHandler(enabled = anyOverlayOpen || editing) {
@@ -130,9 +142,14 @@ fun FoldSpaceRoot(
         viewModel.setSettingsOpen(false)
         viewModel.closeFolder()
         viewModel.closeWidgetPicker()
+        viewModel.closeSheet()
         viewModel.setEditing(false)
     }
 
+    CompositionLocalProvider(
+        LocalIconPack provides iconPack,
+        LocalHapticsEnabled provides state.settings.hapticsEnabled,
+    ) {
     Box(
         Modifier
             .fillMaxSize()
@@ -270,12 +287,90 @@ fun FoldSpaceRoot(
             )
         }
 
+        Overlay(visible = sheet == LauncherViewModel.Sheet.Rules) {
+            RuleEditor(
+                rules = state.settings.automationRules,
+                switchMode = state.settings.switchMode,
+                onSave = viewModel::saveRule,
+                onDelete = viewModel::deleteRule,
+                onToggle = viewModel::setRuleEnabled,
+                onDismiss = viewModel::closeSheet,
+                contentPadding = systemPadding,
+            )
+        }
+
+        Overlay(visible = sheet == LauncherViewModel.Sheet.SimpleApps) {
+            SimpleAppPicker(
+                apps = state.apps,
+                current = viewModel.simpleApps(),
+                slots = viewModel.simpleSlots,
+                onConfirm = {
+                    viewModel.setSimpleApps(it)
+                    viewModel.closeSheet()
+                },
+                onDismiss = viewModel::closeSheet,
+                contentPadding = systemPadding,
+            )
+        }
+
+        Overlay(visible = sheet == LauncherViewModel.Sheet.Pairs) {
+            PairEditor(
+                pairs = state.settings.appPairs,
+                apps = state.apps,
+                support = viewModel.splitSupport(),
+                onSave = viewModel::savePair,
+                onDelete = viewModel::deletePair,
+                onLaunch = viewModel::launchPair,
+                onDismiss = viewModel::closeSheet,
+                contentPadding = systemPadding,
+            )
+        }
+
+        Overlay(visible = sheet == LauncherViewModel.Sheet.IconPack) {
+            IconPackPicker(
+                packs = remember(sheet) { viewModel.installedIconPacks() },
+                selected = state.settings.iconPackPackage,
+                onSelect = viewModel::setIconPack,
+                onDismiss = viewModel::closeSheet,
+                contentPadding = systemPadding,
+            )
+        }
+
+        transientMessage?.let { message ->
+            OrganiseToast(
+                message = message,
+                canUndo = false,
+                onUndo = {},
+                onDismiss = viewModel::dismissTransientMessage,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(
+                        start = 16.dp,
+                        end = 16.dp,
+                        bottom = systemPadding.calculateBottomPadding() + 24.dp,
+                    ),
+            )
+        }
+
         Overlay(visible = settingsOpen) {
             SettingsScreen(
                 state = state,
                 nanoAvailability = viewModel.nanoAvailability(),
                 onSetTheme = { viewModel.setTheme(it) },
                 onSetGridChoice = { viewModel.setGridChoice(it) },
+                onSetHaptics = { viewModel.setHapticsEnabled(it) },
+                onEditRules = { viewModel.openSheet(LauncherViewModel.Sheet.Rules) },
+                onPickSimpleApps = { viewModel.openSheet(LauncherViewModel.Sheet.SimpleApps) },
+                onEditPairs = { viewModel.openSheet(LauncherViewModel.Sheet.Pairs) },
+                onPickIconPack = { viewModel.openSheet(LauncherViewModel.Sheet.IconPack) },
+                onExportLayout = {
+                    viewModel.setSettingsOpen(false)
+                    onExportLayout()
+                },
+                onImportLayout = {
+                    viewModel.setSettingsOpen(false)
+                    onImportLayout()
+                },
                 onSetPowerMode = { viewModel.setPowerMode(it) },
                 onSetSwitchMode = { viewModel.setSwitchMode(it) },
                 onSetWalletCompatibility = { viewModel.setSamsungWalletCompatibility(it) },
@@ -292,6 +387,7 @@ fun FoldSpaceRoot(
                 contentPadding = systemPadding,
             )
         }
+    }
     }
 }
 

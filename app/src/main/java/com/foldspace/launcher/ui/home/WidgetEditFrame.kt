@@ -33,7 +33,7 @@ import kotlin.math.roundToInt
  * Handles are on the right and bottom edges only. Growing from the top or left
  * would have to move the anchor cell as well as the span, which is a different
  * operation on a fixed grid, and one the user can get by moving the widget and
- * resizing again.
+ * resizing again — which [onMoveBy] now makes possible.
  */
 @Composable
 fun WidgetEditFrame(
@@ -43,10 +43,12 @@ fun WidgetEditFrame(
     cellHeightPx: Float,
     onProposeSpan: (spanX: Int, spanY: Int) -> Unit,
     onCommitSpan: () -> Unit,
+    onMoveBy: (cellsX: Int, cellsY: Int) -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tokens = FoldSpaceTheme.tokens
+    val drag = remember { HandleGesture() }
 
     Box(modifier.fillMaxSize()) {
         Box(
@@ -55,7 +57,36 @@ fun WidgetEditFrame(
                 .border(1.5.dp, tokens.accent, RoundedCornerShape(12.dp))
                 .background(tokens.accent.copy(alpha = 0.06f))
                 // A tap in edit mode belongs to the frame, not to the widget.
-                .pointerInput(Unit) { detectTapGestures { } },
+                .pointerInput(Unit) { detectTapGestures { } }
+                // Dragging the frame body moves the widget. The grid's own
+                // long-press-drag can never reach a widget — an AndroidView
+                // swallows the touch before it gets there — so without this
+                // there is no way at all to move one.
+                .pointerInput(cellWidthPx, cellHeightPx) {
+                    detectDragGestures(
+                        onDragStart = {
+                            drag.travel = 0f
+                            drag.travelY = 0f
+                        },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            if (cellWidthPx <= 0f || cellHeightPx <= 0f) {
+                                return@detectDragGestures
+                            }
+                            drag.travel += amount.x
+                            drag.travelY += amount.y
+                            val stepX = (drag.travel / cellWidthPx).roundToInt()
+                            val stepY = (drag.travelY / cellHeightPx).roundToInt()
+                            if (stepX == 0 && stepY == 0) return@detectDragGestures
+                            // Consume whole cells as they are crossed, so the
+                            // widget tracks the finger instead of jumping the
+                            // whole distance when the drag ends.
+                            drag.travel -= stepX * cellWidthPx
+                            drag.travelY -= stepY * cellHeightPx
+                            onMoveBy(stepX, stepY)
+                        },
+                    )
+                },
         )
 
         ResizeHandle(
@@ -144,4 +175,5 @@ private fun BoxScope.ResizeHandle(
 private class HandleGesture {
     var startSpan: Int = 1
     var travel: Float = 0f
+    var travelY: Float = 0f
 }
