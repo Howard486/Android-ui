@@ -30,8 +30,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.foldspace.launcher.core.launcher.AppEntry
+import com.foldspace.launcher.core.search.T9
 import com.foldspace.launcher.core.launcher.ProfileType
 import com.foldspace.launcher.notifications.NotificationSummary
 import com.foldspace.launcher.spaces.SpaceDensity
@@ -81,12 +83,39 @@ fun AppSearchOverlay(
 
     val trimmedQuery = query.trim().lowercase()
 
-    val results = remember(apps, trimmedQuery, tab) {
-        if (trimmedQuery.isEmpty()) {
-            emptyList()
-        } else {
-            apps.asSequence()
-                .filter { tab.profile == null || it.profile == tab.profile }
+    // Digit signatures are derived once per app list rather than once per
+    // keystroke — three hundred labels re-mapped on every character typed is
+    // exactly the kind of cost that makes a search field feel heavy.
+    val t9 = remember(apps) { apps.associate { it.key to T9.index(it.searchLabel) } }
+    val numericQuery = T9.isNumericQuery(trimmedQuery)
+
+    val results = remember(apps, trimmedQuery, tab, t9) {
+        val scoped = apps.asSequence()
+            .filter { tab.profile == null || it.profile == tab.profile }
+
+        when {
+            trimmedQuery.isEmpty() -> emptyList()
+
+            // A run of digits is read as a keypad query first and as literal
+            // text second, so "365" still finds Office 365 while 4663 finds
+            // Gmail. Both are offered; the keypad hits rank above the literal.
+            T9.isNumericQuery(trimmedQuery) -> scoped
+                .mapNotNull { entry ->
+                    val keypad = t9[entry.key]?.let { T9.score(it, trimmedQuery) } ?: T9.NO_MATCH
+                    val literal = entry.searchLabel.contains(trimmedQuery) ||
+                        entry.packageName.contains(trimmedQuery)
+                    val rank = when {
+                        keypad != T9.NO_MATCH -> keypad
+                        literal -> T9.CONTAINS + 1
+                        else -> return@mapNotNull null
+                    }
+                    entry to rank
+                }
+                .sortedWith(compareBy({ it.second }, { it.first.searchLabel }))
+                .map { it.first }
+                .toList()
+
+            else -> scoped
                 .filter {
                     it.searchLabel.contains(trimmedQuery) ||
                         it.packageName.contains(trimmedQuery)
@@ -167,11 +196,26 @@ fun AppSearchOverlay(
 
         if (results.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    text = "找不到「$query」",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = tokens.textMuted,
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "找不到「$query」",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = tokens.textMuted,
+                    )
+                    // An empty result for a run of digits is ambiguous: no such
+                    // app, or an app whose name a keypad cannot spell. T9 maps
+                    // twenty-six letters onto eight keys and there is no such
+                    // mapping for 漢字, so say which one this is.
+                    if (numericQuery) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = "數字鍵盤搜尋只能拼英文名稱，中文名稱請直接輸入文字",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = tokens.textMuted,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
             }
             return@Column
         }

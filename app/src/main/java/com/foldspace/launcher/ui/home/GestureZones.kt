@@ -49,14 +49,26 @@ fun Modifier.launcherVerticalGestures(
     enabled: Boolean = true,
     onSwipeUp: () -> Unit,
     onSwipeDown: () -> Unit,
-): Modifier = if (!enabled) this else this.pointerInput(Unit) {
+    onSwipeDownCorner: (() -> Unit)? = null,
+): Modifier = if (!enabled) this else this.pointerInput(onSwipeDownCorner != null) {
     var totalDrag = 0f
+    var fromCorner = false
     detectVerticalDragGestures(
-        onDragStart = { totalDrag = 0f },
+        onDragStart = { offset ->
+            totalDrag = 0f
+            // Where the drag *started* decides which gesture this is, exactly
+            // as iOS splits its Control Center from its notification list.
+            // Deciding at release instead would mean the same swipe could
+            // change meaning halfway through.
+            fromCorner = onSwipeDownCorner != null &&
+                offset.x > size.width * (1f - CORNER_WIDTH_FRACTION) &&
+                offset.y < size.height * CORNER_HEIGHT_FRACTION
+        },
         onDragEnd = {
             when {
                 totalDrag < -SWIPE_THRESHOLD_PX -> onSwipeUp()
-                totalDrag > SWIPE_THRESHOLD_PX -> onSwipeDown()
+                totalDrag > SWIPE_THRESHOLD_PX ->
+                    if (fromCorner) onSwipeDownCorner?.invoke() else onSwipeDown()
             }
         },
         onDragCancel = { totalDrag = 0f },
@@ -90,6 +102,16 @@ fun Modifier.spaceSwipeGestures(
         },
     )
 }
+
+/**
+ * The top-right corner that opens the quick panel.
+ *
+ * Deliberately a corner and not the whole top edge: swipe-down already belongs
+ * to the notification shade, and taking that away to add a panel would be a
+ * straight trade rather than an addition.
+ */
+private const val CORNER_WIDTH_FRACTION = 0.3f
+private const val CORNER_HEIGHT_FRACTION = 0.25f
 
 private const val SWIPE_THRESHOLD_PX = 120f
 private const val SWIPE_SLOP_PX = 24f

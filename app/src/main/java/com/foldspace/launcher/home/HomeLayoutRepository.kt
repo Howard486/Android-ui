@@ -161,14 +161,28 @@ class HomeLayoutRepository(
      * Keeps the layout in step with what is installed. Newly installed apps
      * land in the first free cell; uninstalled ones are removed everywhere.
      */
-    suspend fun syncInstalled(apps: List<AppEntry>, choice: GridChoice) {
+    suspend fun syncInstalled(
+        apps: List<AppEntry>,
+        choice: GridChoice,
+        hidden: Set<String> = emptySet(),
+    ) {
         val installedPackages = apps.mapTo(mutableSetOf()) { it.packageName }
         val placed = dao.placedPackages().toSet()
 
         (placed - installedPackages).forEach { dao.deleteByPackage(it) }
 
+        // Hiding takes the icon away, which means the cell as well — there is
+        // nowhere to keep it. Unhiding therefore lands the app in the first
+        // free cell rather than the one it used to occupy; remembering a
+        // position for an app that is not on the screen would be a promise
+        // this layout has no room to keep.
+        val hiddenEntries = apps.filter { it.key in hidden }
+        hiddenEntries.forEach { dao.deleteAppComponent(it.packageName, it.className) }
+
         val newPackages = apps.filter {
-            it.profile != ProfileType.Private && it.packageName !in placed
+            it.profile != ProfileType.Private &&
+                it.key !in hidden &&
+                it.packageName !in placed
         }
         if (newPackages.isEmpty()) return
 

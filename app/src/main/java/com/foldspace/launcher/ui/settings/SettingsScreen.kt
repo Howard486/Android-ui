@@ -27,10 +27,13 @@ import androidx.compose.ui.unit.dp
 import com.foldspace.launcher.ai.NanoUnavailableReason
 import com.foldspace.launcher.context.SwitchMode
 import com.foldspace.launcher.settings.GridChoice
+import com.foldspace.launcher.settings.DockShape
+import com.foldspace.launcher.settings.BadgeStyle
 import com.foldspace.launcher.settings.PowerMode
 import com.foldspace.launcher.settings.ThemeId
 import com.foldspace.launcher.ui.LauncherUiState
 import com.foldspace.launcher.ui.components.FoldCard
+import com.foldspace.launcher.ui.components.TextAction
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 
 /**
@@ -49,6 +52,10 @@ fun SettingsScreen(
     onPickSimpleApps: () -> Unit,
     onEditPairs: () -> Unit,
     onPickIconPack: () -> Unit,
+    onPickHiddenApps: () -> Unit,
+    onSetBadgeStyle: (BadgeStyle) -> Unit,
+    onSetDockShape: (DockShape) -> Unit,
+    onSetDesktopModeOnUnfold: (Boolean) -> Unit,
     onExportLayout: () -> Unit,
     onImportLayout: () -> Unit,
     onRequestCalendarAccess: () -> Unit,
@@ -315,6 +322,73 @@ fun SettingsScreen(
                     modifier = Modifier.clickable(onClick = onPickIconPack).padding(vertical = 4.dp),
                 )
             }
+        }
+
+        item {
+            FoldCard(Modifier.fillMaxWidth()) {
+                Text(
+                    text = "隱藏 App",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.textPrimary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = if (state.settings.hiddenApps.isEmpty()) {
+                        "沒有隱藏任何 App。桌面會跟著已安裝清單走，所以每個 App 都會拿到一格；" +
+                            "這裡是唯一可以說「這個我不想看到」的地方。"
+                    } else {
+                        "已隱藏 ${state.settings.hiddenApps.size} 個。隱藏只是拿掉圖示，" +
+                            "App 仍然安裝著也仍然可以從別的地方打開。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                )
+                Spacer(Modifier.height(14.dp))
+                TextAction(text = "選擇要隱藏的 App", onClick = onPickHiddenApps)
+            }
+        }
+
+        item {
+            ToggleCard(
+                title = "展開時進入桌面模式",
+                description = "展開內螢幕時換成工作列版面，App 以視窗開啟。" +
+                    "視窗要真的開成視窗，需要在「開發人員選項 → 啟用自由形式視窗」打開並重新開機；" +
+                    "沒開的話 App 會照常全螢幕，桌面模式裡會直接說明。" +
+                    "FoldSpace 只能決定視窗開在哪、開多大 —— 移動、縮放和標題列是系統的，不歸 Launcher 管。",
+                checked = state.settings.desktopModeOnUnfold,
+                onCheckedChange = onSetDesktopModeOnUnfold,
+            )
+        }
+
+        item {
+            ChoiceCard(
+                title = "通知標記",
+                description = "數字說明有多少在等，圓點只說明有東西在等 —— 滿版一頁時安靜得多。",
+                options = BadgeStyle.entries.map { it to it.label },
+                selected = state.settings.badgeStyle,
+                onSelect = onSetBadgeStyle,
+            )
+        }
+
+        item {
+            ChoiceCard(
+                title = "Dock 列數",
+                description = "一列五格是為外螢幕設計的。內螢幕寬度是它的兩倍以上，" +
+                    "同一個托盤放在上面會顯得空。第三列開始會吃到頁面，所以上限是兩列。",
+                options = (DockShape.MIN_ROWS..DockShape.MAX_ROWS).map { it to "$it 列" },
+                selected = state.settings.dockShape.rows,
+                onSelect = { onSetDockShape(state.settings.dockShape.copy(rows = it)) },
+            )
+        }
+
+        item {
+            ChoiceCard(
+                title = "Dock 每列格數",
+                description = "格數越多每個圖示越小。在外螢幕上超過五個就開始不好按。",
+                options = (DockShape.MIN_COLUMNS..DockShape.MAX_COLUMNS).map { it to "$it 格" },
+                selected = state.settings.dockShape.columns,
+                onSelect = { onSetDockShape(state.settings.dockShape.copy(columns = it)) },
+            )
         }
 
         item {

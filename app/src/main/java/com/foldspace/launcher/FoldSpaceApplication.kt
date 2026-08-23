@@ -6,6 +6,8 @@ import com.foldspace.launcher.ai.NanoAdapter
 import com.foldspace.launcher.ai.PromptNanoAdapter
 import com.foldspace.launcher.ai.TextInference
 import com.foldspace.launcher.context.ContextEngine
+import com.foldspace.launcher.desktop.DesktopLauncher
+import com.foldspace.launcher.quick.QuickController
 import com.foldspace.launcher.context.RuleEngine
 import com.foldspace.launcher.core.launcher.HomeRoleManager
 import com.foldspace.launcher.core.launcher.LauncherAppsRepository
@@ -114,6 +116,12 @@ class AppContainer(context: Context) {
 
     /** §4 — two apps side by side, as far as the platform permits. */
     val splitLauncher = SplitLauncher(context, launcherApps)
+
+    /** Torch, volume and brightness — and honesty about the rest. */
+    val quickControls = QuickController(context)
+
+    /** Opens apps as windows on the unfolded screen, where the device allows. */
+    val desktopLauncher = DesktopLauncher(context)
 
     /** §5.3 — the shortcuts an app publishes, and pin requests it makes. */
     val shortcuts = ShortcutRepository(context)

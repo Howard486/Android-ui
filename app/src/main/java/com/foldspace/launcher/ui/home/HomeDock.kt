@@ -3,7 +3,9 @@ package com.foldspace.launcher.ui.home
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -17,6 +19,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.foldspace.launcher.core.launcher.AppEntry
 import com.foldspace.launcher.notifications.NotificationSummary
+import com.foldspace.launcher.settings.DockShape
 import com.foldspace.launcher.spaces.SpaceDensity
 import com.foldspace.launcher.ui.components.AppTile
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
@@ -41,8 +44,10 @@ fun HomeDock(
     onLaunch: (AppEntry) -> Unit,
     onLongPress: (AppEntry) -> Unit,
     modifier: Modifier = Modifier,
+    shape: DockShape = DockShape.Default,
 ) {
     val tokens = FoldSpaceTheme.tokens
+    val rows = DockSlots.arrange(apps, shape.rows, shape.columns)
 
     Box(
         modifier
@@ -53,7 +58,7 @@ fun HomeDock(
             .padding(horizontal = 8.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        if (apps.isEmpty()) {
+        if (rows.isEmpty()) {
             // An empty tray reads as broken. Saying why costs one line and
             // tells the user the one thing that fills it.
             Box(Modifier.height(density.dockIconSizeDp.dp), contentAlignment = Alignment.Center) {
@@ -66,24 +71,32 @@ fun HomeDock(
             return@Box
         }
 
-        Row(
+        Column(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            apps.take(MAX_SLOTS).forEach { entry ->
-                AppTile(
-                    entry = entry,
-                    onClick = { onLaunch(entry) },
-                    onLongClick = { onLongPress(entry) },
-                    iconSize = density.dockIconSizeDp.dp,
-                    showLabel = false,
-                    badgeCount = notifications.countFor(entry.packageName),
-                )
+            rows.forEach { row ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    row.forEach { entry ->
+                        AppTile(
+                            entry = entry,
+                            onClick = { onLaunch(entry) },
+                            onLongClick = { onLongPress(entry) },
+                            modifier = Modifier.weight(1f),
+                            iconSize = density.dockIconSizeDp.dp,
+                            showLabel = false,
+                            badgeCount = notifications.countFor(entry.packageName),
+                        )
+                    }
+                    // A short last row must not stretch its icons to fill the
+                    // width, or the tray stops looking like a grid.
+                    repeat(shape.columns - row.size) { Spacer(Modifier.weight(1f)) }
+                }
             }
         }
     }
 }
-
-/** iOS holds four. More than five on a cover screen stops being tappable. */
-private const val MAX_SLOTS = 5

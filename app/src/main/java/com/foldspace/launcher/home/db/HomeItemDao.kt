@@ -91,6 +91,21 @@ abstract class HomeItemDao {
     )
     abstract suspend fun deleteByPackage(packageName: String)
 
+    /**
+     * Removes one launcher activity wherever it sits.
+     *
+     * Narrower than [deleteByPackage] on purpose: hiding is per launchable
+     * activity, and an app that publishes two of them should not lose both
+     * because one was hidden.
+     */
+    @Query(
+        """
+        DELETE FROM home_items
+        WHERE packageName = :packageName AND className = :className AND itemType = 'app'
+        """,
+    )
+    abstract suspend fun deleteAppComponent(packageName: String, className: String)
+
     @Query("DELETE FROM home_items WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey")
     abstract suspend fun clearLayout(surfaceKey: String, postureKey: String)
 

@@ -55,37 +55,41 @@ class IconPackRepository(private val context: Context) {
             context.packageManager.getResourcesForApplication(packageName)
         }.getOrNull() ?: return null
 
-        val map = runCatching { parseAppFilter(resources, packageName) }.getOrNull()
-        if (map.isNullOrEmpty()) return null
-        return LoadedIconPack(packageName, resources, map)
+        val filter = runCatching { parseAppFilter(resources, packageName) }.getOrNull()
+        if (filter == null || filter.isEmpty) return null
+        return LoadedIconPack(packageName, resources, filter)
     }
 
+    /**
+     * Reads both entry kinds in one pass.
+     *
+     * This used to require a `drawable` attribute and `continue` otherwise,
+     * which silently dropped every `<calendar>` tag — those carry a `prefix`
+     * instead, and that is the whole dynamic-calendar convention.
+     */
     private fun parseAppFilter(
         resources: Resources,
         packageName: String,
-    ): Map<String, String> {
+    ): AppFilterMap {
         val id = resources.getIdentifier("appfilter", "xml", packageName)
-        if (id == 0) return emptyMap()
+        if (id == 0) return AppFilterMap()
 
         val parser = resources.getXml(id)
-        val map = mutableMapOf<String, String>()
+        val items = mutableMapOf<String, String>()
+        val calendars = mutableMapOf<String, String>()
 
         while (parser.next() != XmlPullParser.END_DOCUMENT) {
             if (parser.eventType != XmlPullParser.START_TAG) continue
-            if (parser.name != "item") continue
 
             val component = parser.getAttributeValue(null, "component") ?: continue
-            val drawable = parser.getAttributeValue(null, "drawable") ?: continue
-            componentKey(component)?.let { map[it] = drawable }
-        }
-        return map
-    }
+            val key = componentKeyOf(component) ?: continue
 
-    /** `ComponentInfo{pkg/cls}` is the format packs actually ship. */
-    private fun componentKey(raw: String): String? {
-        val inner = raw.substringAfter('{', "").substringBefore('}', "")
-        if (inner.isBlank() || '/' !in inner) return null
-        return inner
+            when (parser.name) {
+                "item" -> parser.getAttributeValue(null, "drawable")?.let { items[key] = it }
+                "calendar" -> parser.getAttributeValue(null, "prefix")?.let { calendars[key] = it }
+            }
+        }
+        return AppFilterMap(items = items, calendars = calendars)
     }
 
     private companion object {
@@ -101,19 +105,33 @@ class IconPackRepository(private val context: Context) {
 class LoadedIconPack(
     val packageName: String,
     private val resources: Resources,
-    private val components: Map<String, String>,
+    private val filter: AppFilterMap,
 ) {
-    /** Null means the pack has no art for this app; the caller falls back. */
-    fun iconFor(component: ComponentName): Drawable? {
-        val name = components["${component.packageName}/${component.className}"]
-            ?: return null
-        val id = resources.getIdentifier(name, "drawable", packageName)
-        if (id == 0) return null
-        @Suppress("DEPRECATION")
-        return runCatching { resources.getDrawable(id, null) }.getOrNull()
+    /**
+     * Null means the pack has no art for this app; the caller falls back to
+     * the platform drawable.
+     *
+     * [dayOfMonth] only matters for an app the pack declared as a dynamic
+     * calendar; for everything else it is ignored, so callers can pass today
+     * unconditionally.
+     */
+    fun iconFor(component: ComponentName, dayOfMonth: Int = 1): Drawable? {
+        val key = "${component.packageName}/${component.className}"
+        for (name in filter.drawableNamesFor(key, dayOfMonth)) {
+            val id = resources.getIdentifier(name, "drawable", packageName)
+            if (id == 0) continue
+            @Suppress("DEPRECATION")
+            val drawable = runCatching { resources.getDrawable(id, null) }.getOrNull()
+            if (drawable != null) return drawable
+        }
+        return null
     }
 
-    val size: Int get() = components.size
+    /** Whether this app's art changes with the date — see [AppFilterMap]. */
+    fun isDynamic(component: ComponentName): Boolean =
+        filter.isDynamic("${component.packageName}/${component.className}")
+
+    val size: Int get() = filter.size
 }
 
 /** Reads a pack's own icon for the settings list. */

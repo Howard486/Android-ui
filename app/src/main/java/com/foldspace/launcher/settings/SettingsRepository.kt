@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -65,6 +66,43 @@ enum class GridChoice(
     }
 }
 
+/**
+ * How a notification count is drawn on an icon.
+ *
+ * Three because the two obvious options answer different questions. A count
+ * tells you how much is waiting; a dot tells you only that something is, which
+ * is all some people want and is far quieter on a full page. Off is the third
+ * real answer, and a launcher that does not offer it is deciding for you.
+ */
+enum class BadgeStyle(val key: String, val label: String) {
+    Count("count", "數字"),
+    Dot("dot", "圓點"),
+    Off("off", "不顯示"),
+    ;
+
+    companion object {
+        fun fromKey(key: String?): BadgeStyle = entries.firstOrNull { it.key == key } ?: Count
+    }
+}
+
+/**
+ * Dock shape.
+ *
+ * One row of five was sized for a cover screen. The inner display of a Fold is
+ * more than twice as wide and the same tray looks marooned on it, which is the
+ * reason Microsoft Launcher offers up to three rows. Two is the ceiling here:
+ * a third row starts eating the page it is supposed to sit under.
+ */
+data class DockShape(val rows: Int, val columns: Int) {
+    companion object {
+        const val MIN_ROWS = 1
+        const val MAX_ROWS = 2
+        const val MIN_COLUMNS = 3
+        const val MAX_COLUMNS = 6
+        val Default = DockShape(rows = 1, columns = 5)
+    }
+}
+
 /** Everything the user can change. One object so the UI observes a single flow. */
 data class FoldSpaceSettings(
     val currentSpace: SpaceId = SpaceId.General,
@@ -86,6 +124,24 @@ data class FoldSpaceSettings(
     val excludedNotificationPackages: Set<String> = emptySet(),
     val nanoEnabled: Boolean = false,
     val pinnedDockApps: Map<String, List<String>> = emptyMap(),
+    /**
+     * Apps the user has taken off the home screen entirely, by [AppEntry.key].
+     *
+     * With no app drawer an unplaced app is an unreachable app, so the layout
+     * follows the installed list — which means "I do not want to see this"
+     * had no way to be said at all until now.
+     */
+    val hiddenApps: Set<String> = emptySet(),
+    val badgeStyle: BadgeStyle = BadgeStyle.Count,
+    val dockShape: DockShape = DockShape.Default,
+    /**
+     * Whether unfolding switches to the desktop shell.
+     *
+     * On by default because it is what was asked for, and switchable because
+     * unfolding is not always a decision to start working — sometimes it is
+     * just a bigger screen for a video.
+     */
+    val desktopModeOnUnfold: Boolean = true,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "foldspace")
@@ -151,6 +207,9 @@ class SettingsRepository(
         put(BackupKeys.THEME, setOf(current.themeId.key))
         put(BackupKeys.GRID, setOf(current.gridChoice.key))
         current.iconPackPackage?.let { put(BackupKeys.ICON_PACK, setOf(it)) }
+        put(BackupKeys.BADGE_STYLE, setOf(current.badgeStyle.key))
+        put(BackupKeys.DOCK_SHAPE, setOf("${current.dockShape.rows}x${current.dockShape.columns}"))
+        if (current.hiddenApps.isNotEmpty()) put(BackupKeys.HIDDEN, current.hiddenApps)
         current.pinnedDockApps.forEach { (spaceKey, keys) ->
             if (keys.isNotEmpty()) put(BackupKeys.PINNED_PREFIX + spaceKey, keys.toSet())
         }
@@ -163,6 +222,17 @@ class SettingsRepository(
         values[BackupKeys.THEME]?.firstOrNull()?.let { prefs[Keys.Theme] = it }
         values[BackupKeys.GRID]?.firstOrNull()?.let { prefs[Keys.Grid] = it }
         values[BackupKeys.ICON_PACK]?.firstOrNull()?.let { prefs[Keys.IconPack] = it }
+        values[BackupKeys.BADGE_STYLE]?.firstOrNull()?.let { prefs[Keys.BadgeStyle] = it }
+        values[BackupKeys.HIDDEN]?.let { prefs[Keys.HiddenApps] = it }
+        values[BackupKeys.DOCK_SHAPE]?.firstOrNull()?.let { raw ->
+            val rows = raw.substringBefore('x').toIntOrNull()
+            val columns = raw.substringAfter('x').toIntOrNull()
+            if (rows != null && columns != null) {
+                prefs[Keys.DockRows] = rows.coerceIn(DockShape.MIN_ROWS, DockShape.MAX_ROWS)
+                prefs[Keys.DockColumns] =
+                    columns.coerceIn(DockShape.MIN_COLUMNS, DockShape.MAX_COLUMNS)
+            }
+        }
         values.forEach { (key, entries) ->
             if (!key.startsWith(BackupKeys.PINNED_PREFIX)) return@forEach
             val spaceKey = key.removePrefix(BackupKeys.PINNED_PREFIX)
@@ -180,6 +250,9 @@ class SettingsRepository(
         const val GRID = "grid"
         const val ICON_PACK = "iconPack"
         const val PINNED_PREFIX = "pinned:"
+        const val BADGE_STYLE = "badgeStyle"
+        const val DOCK_SHAPE = "dockShape"
+        const val HIDDEN = "hiddenApps"
     }
 
     suspend fun setSamsungWalletCompatibility(enabled: Boolean) =
@@ -194,6 +267,27 @@ class SettingsRepository(
         val current = prefs[Keys.ExcludedPackages].orEmpty()
         prefs[Keys.ExcludedPackages] =
             if (packageName in current) current - packageName else current + packageName
+    }
+
+    /**
+     * Hiding is not a lock and does not pretend to be: the app is still
+     * installed and still launchable from anywhere else on the device. What it
+     * removes is the icon.
+     */
+    suspend fun setAppHidden(appKey: String, hidden: Boolean) = edit { prefs ->
+        val current = prefs[Keys.HiddenApps].orEmpty()
+        prefs[Keys.HiddenApps] = if (hidden) current + appKey else current - appKey
+    }
+
+    suspend fun setBadgeStyle(style: BadgeStyle) = edit { it[Keys.BadgeStyle] = style.key }
+
+    suspend fun setDesktopModeOnUnfold(enabled: Boolean) =
+        edit { it[Keys.DesktopOnUnfold] = enabled }
+
+    suspend fun setDockShape(shape: DockShape) = edit { prefs ->
+        prefs[Keys.DockRows] = shape.rows.coerceIn(DockShape.MIN_ROWS, DockShape.MAX_ROWS)
+        prefs[Keys.DockColumns] =
+            shape.columns.coerceIn(DockShape.MIN_COLUMNS, DockShape.MAX_COLUMNS)
     }
 
     suspend fun setPinnedApps(space: SpaceId, keys: List<String>) = edit { prefs ->
@@ -233,6 +327,18 @@ class SettingsRepository(
                 ?.filter(String::isNotBlank)
                 .orEmpty()
         },
+        hiddenApps = prefs[Keys.HiddenApps].orEmpty(),
+        badgeStyle = BadgeStyle.fromKey(prefs[Keys.BadgeStyle]),
+        desktopModeOnUnfold = prefs[Keys.DesktopOnUnfold] ?: true,
+        // Clamped on the way out as well as in: a value written by an older
+        // build, or by a restored backup, must not produce a dock with zero
+        // rows and no way back to the settings screen.
+        dockShape = DockShape(
+            rows = (prefs[Keys.DockRows] ?: DockShape.Default.rows)
+                .coerceIn(DockShape.MIN_ROWS, DockShape.MAX_ROWS),
+            columns = (prefs[Keys.DockColumns] ?: DockShape.Default.columns)
+                .coerceIn(DockShape.MIN_COLUMNS, DockShape.MAX_COLUMNS),
+        ),
     )
 
     private object Keys {
@@ -249,6 +355,11 @@ class SettingsRepository(
         val ContentAnalysis = booleanPreferencesKey("notification_content_analysis")
         val ExcludedPackages = stringSetPreferencesKey("excluded_notification_packages")
         val NanoEnabled = booleanPreferencesKey("nano_enabled")
+        val HiddenApps = stringSetPreferencesKey("hidden_apps")
+        val BadgeStyle = stringPreferencesKey("badge_style")
+        val DesktopOnUnfold = booleanPreferencesKey("desktop_mode_on_unfold")
+        val DockRows = intPreferencesKey("dock_rows")
+        val DockColumns = intPreferencesKey("dock_columns")
 
         fun pinnedFor(space: SpaceId) = stringPreferencesKey("pinned_${space.key}")
     }

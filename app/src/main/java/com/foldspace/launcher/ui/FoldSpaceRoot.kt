@@ -54,11 +54,19 @@ import com.foldspace.launcher.ui.home.AppLibraryPage
 import com.foldspace.launcher.ui.home.ItemActionSheet
 import com.foldspace.launcher.ui.home.LocalHapticsEnabled
 import com.foldspace.launcher.ui.home.SimpleAppPicker
+import com.foldspace.launcher.ui.settings.HiddenAppsPicker
 import com.foldspace.launcher.ui.icons.IconPackPicker
+import com.foldspace.launcher.ui.components.LocalBadgeStyle
+import com.foldspace.launcher.ui.icons.LocalDayOfMonth
 import com.foldspace.launcher.ui.icons.LocalIconPack
+import com.foldspace.launcher.ui.icons.rememberDayOfMonth
 import com.foldspace.launcher.ui.pairs.PairEditor
 import com.foldspace.launcher.ui.rules.RuleEditor
+import com.foldspace.launcher.desktop.FreeformState
+import com.foldspace.launcher.ui.desktop.DesktopHome
+import com.foldspace.launcher.ui.quick.QuickPanel
 import com.foldspace.launcher.ui.home.BookHome
+import com.foldspace.launcher.ui.home.DockSlots
 import com.foldspace.launcher.ui.home.HomeDock
 import com.foldspace.launcher.ui.home.PageOverview
 import com.foldspace.launcher.ui.home.PagedHome
@@ -113,6 +121,8 @@ fun FoldSpaceRoot(
     val appCategories by viewModel.appCategories.collectAsStateWithLifecycle()
     val sheet by viewModel.sheet.collectAsStateWithLifecycle()
     val iconPack by viewModel.iconPack.collectAsStateWithLifecycle()
+    val desktopMode by viewModel.desktopMode.collectAsStateWithLifecycle()
+    val quickPanelOpen by viewModel.quickPanelOpen.collectAsStateWithLifecycle()
     val transientMessage by viewModel.transientMessage.collectAsStateWithLifecycle()
     val longPressItem by viewModel.longPressItem.collectAsStateWithLifecycle()
     val pageOverviewOpen by viewModel.pageOverviewOpen.collectAsStateWithLifecycle()
@@ -139,7 +149,7 @@ fun FoldSpaceRoot(
     // inset the header already consumed.
     val bodyPadding = PaddingValues(bottom = systemPadding.calculateBottomPadding())
 
-    val anyOverlayOpen = drawerOpen || notificationCenterOpen || settingsOpen ||
+    val anyOverlayOpen = drawerOpen || notificationCenterOpen || settingsOpen || quickPanelOpen ||
         openFolder != null || widgetPickerOpen || sheet != null || longPressItem != null ||
         pageOverviewOpen
 
@@ -153,11 +163,14 @@ fun FoldSpaceRoot(
         viewModel.closeSheet()
         viewModel.dismissLongPress()
         viewModel.setPageOverviewOpen(false)
+        viewModel.setQuickPanelOpen(false)
         viewModel.setEditing(false)
     }
 
     CompositionLocalProvider(
         LocalIconPack provides iconPack,
+        LocalDayOfMonth provides rememberDayOfMonth(),
+        LocalBadgeStyle provides state.settings.badgeStyle,
         LocalHapticsEnabled provides state.settings.hapticsEnabled,
     ) {
     Box(
@@ -233,6 +246,14 @@ fun FoldSpaceRoot(
                 onOpenSettings = { viewModel.setSettingsOpen(true) },
                 onAcceptSuggestion = viewModel::acceptSuggestion,
                 onDismissSuggestion = viewModel::dismissSuggestion,
+                onSwipeDownCorner = { viewModel.setQuickPanelOpen(true) },
+                desktopMode = desktopMode,
+                // Read per composition rather than cached: the user can flip
+                // the developer switch and come back without FoldSpace being
+                // restarted, and a stale "not available" would be a lie.
+                freeform = remember(desktopMode) { viewModel.freeformState() },
+                onLeaveDesktop = { viewModel.setDesktopMode(false) },
+                onOpenFreeformSettings = viewModel::openFreeformSettings,
                 contentPadding = systemPadding,
             )
         }
@@ -379,6 +400,26 @@ fun FoldSpaceRoot(
             )
         }
 
+        Overlay(visible = quickPanelOpen) {
+            QuickPanel(
+                controller = viewModel.quickControls(),
+                onDismiss = { viewModel.setQuickPanelOpen(false) },
+                contentPadding = systemPadding,
+            )
+        }
+
+        Overlay(visible = sheet == LauncherViewModel.Sheet.HiddenApps) {
+            HiddenAppsPicker(
+                // Every installed app, not the visible list — a picker filtered
+                // by its own setting could never show you what to un-hide.
+                apps = state.allApps,
+                hidden = state.settings.hiddenApps,
+                onToggle = viewModel::setAppHidden,
+                onDismiss = viewModel::closeSheet,
+                contentPadding = systemPadding,
+            )
+        }
+
         Overlay(visible = sheet == LauncherViewModel.Sheet.IconPack) {
             IconPackPicker(
                 packs = remember(sheet) { viewModel.installedIconPacks() },
@@ -415,6 +456,10 @@ fun FoldSpaceRoot(
                 onEditRules = { viewModel.openSheet(LauncherViewModel.Sheet.Rules) },
                 onPickSimpleApps = { viewModel.openSheet(LauncherViewModel.Sheet.SimpleApps) },
                 onEditPairs = { viewModel.openSheet(LauncherViewModel.Sheet.Pairs) },
+                onPickHiddenApps = { viewModel.openSheet(LauncherViewModel.Sheet.HiddenApps) },
+                onSetBadgeStyle = viewModel::setBadgeStyle,
+                onSetDockShape = viewModel::setDockShape,
+                onSetDesktopModeOnUnfold = viewModel::setDesktopModeOnUnfold,
                 onPickIconPack = { viewModel.openSheet(LauncherViewModel.Sheet.IconPack) },
                 onExportLayout = {
                     viewModel.setSettingsOpen(false)
@@ -481,11 +526,16 @@ private fun HomeScaffold(
     onLongPress: (AppEntry) -> Unit,
     onSwipeUp: () -> Unit,
     onSwipeDown: () -> Unit,
+    onSwipeDownCorner: () -> Unit,
     onSelectSpace: (SpaceId) -> Unit,
     onOpenNotifications: () -> Unit,
     onOpenSettings: () -> Unit,
     onAcceptSuggestion: () -> Unit,
     onDismissSuggestion: () -> Unit,
+    desktopMode: Boolean,
+    freeform: FreeformState,
+    onLeaveDesktop: () -> Unit,
+    onOpenFreeformSettings: () -> Unit,
     contentPadding: PaddingValues,
 ) {
     // The header owns the status-bar inset; the body keeps only the bottom one
@@ -495,7 +545,11 @@ private fun HomeScaffold(
     Box(
         Modifier
             .fillMaxSize()
-            .launcherVerticalGestures(onSwipeUp = onSwipeUp, onSwipeDown = onSwipeDown)
+            .launcherVerticalGestures(
+                onSwipeUp = onSwipeUp,
+                onSwipeDown = onSwipeDown,
+                onSwipeDownCorner = onSwipeDownCorner,
+            )
             .spaceSwipeGestures(
                 onNext = { onSelectSpace(state.space.next()) },
                 onPrevious = { onSelectSpace(state.space.previous()) },
@@ -537,36 +591,67 @@ private fun HomeScaffold(
             state.window.layoutMode == LayoutMode.Book ->
                 BookHome(state, onLaunch, onLongPress, contentPadding = bodyPadding)
 
-            else -> PagedHome(
-                layout = layout,
-                notifications = state.notifications,
-                density = state.spaceConfig.density,
-                widgetHost = widgetHost,
-                editing = editing,
-                onLaunch = onLaunchItem,
-                onLongPress = onItemLongPress,
-                onOpenFolder = onOpenFolder,
-                onMove = onMoveItem,
-                onDropOnto = onDropOnto,
-                onLongPressEmpty = onLongPressEmpty,
-                onBeginEditing = onBeginEditing,
-                onResizeWidget = onResizeWidget,
-                onRemoveItem = onRemoveItem,
-                onCellMeasured = onCellMeasured,
-                contentPadding = bodyPadding,
-                feedContent = feedContent,
-                workContent = workContent,
-                libraryContent = libraryContent,
-                dockContent = {
-                    HomeDock(
-                        apps = state.dockApps(),
+            else -> {
+                // One PagedHome, two shells around it. Desktop mode swaps the
+                // dock for a taskbar; it does not get its own arrangement,
+                // which is the same decision the three contexts already made.
+                val paged: @Composable (@Composable () -> Unit) -> Unit = { dock ->
+                    PagedHome(
+                        layout = layout,
                         notifications = state.notifications,
                         density = state.spaceConfig.density,
+                        widgetHost = widgetHost,
+                        editing = editing,
+                        onLaunch = onLaunchItem,
+                        onLongPress = onItemLongPress,
+                        onOpenFolder = onOpenFolder,
+                        onMove = onMoveItem,
+                        onDropOnto = onDropOnto,
+                        onLongPressEmpty = onLongPressEmpty,
+                        onBeginEditing = onBeginEditing,
+                        onResizeWidget = onResizeWidget,
+                        onRemoveItem = onRemoveItem,
+                        onCellMeasured = onCellMeasured,
+                        contentPadding = bodyPadding,
+                        feedContent = feedContent,
+                        workContent = workContent,
+                        libraryContent = libraryContent,
+                        dockContent = dock,
+                    )
+                }
+
+                if (desktopMode) {
+                    DesktopHome(
+                        taskbarApps = state.dockApps(capacity = TASKBAR_CAPACITY),
+                        notifications = state.notifications,
+                        freeform = freeform,
+                        clock = headerClockFormat.format(rememberMinuteTick()),
                         onLaunch = onLaunch,
                         onLongPress = onLongPress,
+                        onOpenStart = onSwipeUp,
+                        onLeaveDesktop = onLeaveDesktop,
+                        onOpenFreeformSettings = onOpenFreeformSettings,
+                        contentPadding = bodyPadding,
+                        // No dock underneath: the taskbar is the dock here,
+                        // and two trays stacked would be one too many.
+                        desktopContent = { paged {} },
                     )
-                },
-            )
+                } else {
+                    paged {
+                        val dockShape = state.settings.dockShape
+                        HomeDock(
+                            apps = state.dockApps(
+                                capacity = DockSlots.capacity(dockShape.rows, dockShape.columns),
+                            ),
+                            notifications = state.notifications,
+                            density = state.spaceConfig.density,
+                            onLaunch = onLaunch,
+                            onLongPress = onLongPress,
+                            shape = dockShape,
+                        )
+                    }
+                }
+            }
         }
 
             }
@@ -611,16 +696,7 @@ private fun LauncherHeader(
     modifier: Modifier = Modifier,
 ) {
     val tokens = FoldSpaceTheme.tokens
-    val now by produceState(initialValue = Date()) {
-        while (true) {
-            value = Date()
-            val calendar = Calendar.getInstance()
-            delay(
-                60_000L - (calendar.get(Calendar.SECOND) * 1000L +
-                    calendar.get(Calendar.MILLISECOND)),
-            )
-        }
-    }
+    val now = rememberMinuteTick()
 
     Column(
         modifier
@@ -685,6 +761,31 @@ private fun LauncherHeader(
         }
     }
 }
+
+/**
+ * A clock that updates on the minute and not more often.
+ *
+ * Sleeping the remainder of the current minute rather than a flat sixty
+ * seconds keeps it from drifting a second later on every tick, which is what
+ * makes a launcher clock visibly disagree with the status bar.
+ */
+@Composable
+private fun rememberMinuteTick(): Date {
+    val now by produceState(initialValue = Date()) {
+        while (true) {
+            value = Date()
+            val calendar = Calendar.getInstance()
+            delay(
+                60_000L - (calendar.get(Calendar.SECOND) * 1000L +
+                    calendar.get(Calendar.MILLISECOND)),
+            )
+        }
+    }
+    return now
+}
+
+/** A taskbar holds more than a dock; this is where it stops being tappable. */
+private const val TASKBAR_CAPACITY = 12
 
 private val headerClockFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
 private val headerDateFormat = SimpleDateFormat("EEEE M月d日", Locale.getDefault())

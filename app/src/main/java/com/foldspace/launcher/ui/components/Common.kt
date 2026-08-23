@@ -37,6 +37,8 @@ import androidx.compose.material3.MaterialTheme
 import com.foldspace.launcher.core.launcher.AppEntry
 import android.content.ComponentName
 import com.foldspace.launcher.ui.icons.IconShaper
+import com.foldspace.launcher.settings.BadgeStyle
+import com.foldspace.launcher.ui.icons.LocalDayOfMonth
 import com.foldspace.launcher.ui.icons.LocalIconPack
 import com.foldspace.launcher.ui.icons.Squircle
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
@@ -84,6 +86,7 @@ fun AppTile(
     badgeCount: Int = 0,
 ) {
     val tokens = FoldSpaceTheme.tokens
+    val badgeStyle = LocalBadgeStyle.current
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
@@ -104,8 +107,22 @@ fun AppTile(
     ) {
         Box(contentAlignment = Alignment.TopEnd) {
             AppIcon(entry, iconSize)
-            if (badgeCount > 0) {
-                Box(
+            // A count answers "how much is waiting"; a dot answers only that
+            // something is, which is far quieter on a full page and is all
+            // some people want. Off is the third real answer, and a launcher
+            // that does not offer it is deciding for you.
+            when {
+                badgeCount <= 0 || badgeStyle == BadgeStyle.Off -> Unit
+
+                badgeStyle == BadgeStyle.Dot -> Box(
+                    Modifier
+                        .offset(x = 2.dp, y = (-2).dp)
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(tokens.accent),
+                )
+
+                else -> Box(
                     Modifier
                         .offset(x = 4.dp, y = (-4).dp)
                         .size(if (badgeCount > 9) 20.dp else 16.dp)
@@ -160,14 +177,24 @@ fun AppIcon(entry: AppEntry, size: Dp) {
     // round and teardrop-shaped in the same set still lands as one uniform
     // grid.
     val pack = LocalIconPack.current
-    val bitmap = remember(entry.key, pxSize, tokens.surfaceElevated, pack) {
-        val packed = pack?.iconFor(ComponentName(entry.packageName, entry.className))
+    val component = remember(entry.key) { ComponentName(entry.packageName, entry.className) }
+
+    // Only a pack that declared this app as a dynamic calendar cares what day
+    // it is. Keying every icon on the date would throw the whole cache away
+    // at midnight to redraw one of them.
+    val dynamic = pack?.isDynamic(component) == true
+    val day = LocalDayOfMonth.current
+    val dayKey = if (dynamic) day else 0
+
+    val bitmap = remember(entry.key, pxSize, tokens.surfaceElevated, pack, dayKey) {
+        val packed = pack?.iconFor(component, day)
         IconShaper.render(
             drawable = packed ?: entry.icon,
             sizePx = pxSize,
             // The pack is part of the key, or switching packs would keep
             // serving the previous one's art out of the cache.
-            key = entry.key + "@" + (pack?.packageName ?: "system"),
+            key = entry.key + "@" + (pack?.packageName ?: "system") +
+                if (dynamic) "@d" + day else "",
             tile = tokens.surfaceElevated,
         )
     }

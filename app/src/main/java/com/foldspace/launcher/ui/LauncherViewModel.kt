@@ -39,7 +39,11 @@ import com.foldspace.launcher.notifications.NotificationSummary
 import com.foldspace.launcher.powerdock.PowerDockResolver
 import com.foldspace.launcher.powerdock.PowerDockState
 import com.foldspace.launcher.settings.FoldSpaceSettings
+import com.foldspace.launcher.desktop.FreeformState
+import com.foldspace.launcher.quick.QuickController
 import com.foldspace.launcher.settings.GridChoice
+import com.foldspace.launcher.settings.DockShape
+import com.foldspace.launcher.settings.BadgeStyle
 import com.foldspace.launcher.settings.PowerMode
 import com.foldspace.launcher.settings.ThemeId
 import com.foldspace.launcher.spaces.SpaceConfig
@@ -70,7 +74,16 @@ import java.util.Calendar
 data class LauncherUiState(
     val settings: FoldSpaceSettings = FoldSpaceSettings(),
     val window: FoldWindowState = FoldWindowState(),
+    /**
+     * The apps the user should see — [allApps] minus anything hidden.
+     *
+     * Filtering here rather than at each screen is deliberate: the drawer, the
+     * library, the dock and the suggestion list would each have had to
+     * remember to do it, and the one that forgot would be the bug.
+     */
     val apps: List<AppEntry> = emptyList(),
+    /** Everything installed, hidden included. For the picker and for pairs. */
+    val allApps: List<AppEntry> = emptyList(),
     val appsLoading: Boolean = true,
     val notifications: NotificationSummary = NotificationSummary(),
     val suggestion: SpaceSuggestion? = null,
@@ -102,13 +115,17 @@ data class LauncherUiState(
      * §5.4 Dynamic Dock: fixed pins first, then the smart slots filled from
      * usage. Apps already pinned are excluded so a pin never appears twice.
      */
-    fun dockApps(): List<AppEntry> {
+    fun dockApps(capacity: Int = Int.MAX_VALUE): List<AppEntry> {
         val byKey = apps.associateBy { it.key }
         val pinnedKeys = settings.pinnedDockApps[space.key].orEmpty()
         val pinned = pinnedKeys.mapNotNull(byKey::get)
 
-        val slots = spaceConfig.smartDockSlots
-        if (slots <= 0) return pinned
+        // Capacity only ever trims. A wider tray is room for more *pins*, not
+        // licence to promote more apps the user never chose — the Space's
+        // smart-slot count is a design decision, not a gap to be filled.
+        val room = (capacity - pinned.size).coerceAtLeast(0)
+        val slots = minOf(spaceConfig.smartDockSlots, room)
+        if (slots <= 0) return pinned.take(capacity)
 
         val pinnedPackages = pinned.mapTo(mutableSetOf()) { it.packageName }
         val smart = apps
@@ -120,7 +137,7 @@ data class LauncherUiState(
             .take(slots)
             .toList()
 
-        return pinned + smart
+        return (pinned + smart).take(capacity)
     }
 }
 
@@ -162,7 +179,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         LauncherUiState(
             settings = settings,
             window = window,
-            apps = apps,
+            apps = if (settings.hiddenApps.isEmpty()) {
+                apps
+            } else {
+                apps.filter { it.key !in settings.hiddenApps }
+            },
+            allApps = apps,
             appsLoading = false,
             notifications = notifications,
             suggestion = suggestion,
@@ -306,7 +328,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
      * launcher cannot force it.
      */
     fun launchPair(pair: AppPair) {
-        if (!container.splitLauncher.launch(pair, state.value.apps)) {
+        if (!container.splitLauncher.launch(pair, state.value.allApps)) {
             _transientMessage.value = "配對中有 App 已移除，請重新設定"
         }
     }
@@ -342,7 +364,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             _transientMessage.value = "這不是 FoldSpace 的備份檔"
             return@launch
         }
-        val outcome = container.homeLayout.importLayout(backup, state.value.apps)
+        val outcome = container.homeLayout.importLayout(backup, state.value.allApps)
         if (backup.settings.isNotEmpty()) container.settings.importSettings(backup.settings)
         _transientMessage.value = outcome
             .copy(settingsRestored = backup.settings.isNotEmpty())
@@ -406,7 +428,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val settingsOpen: StateFlow<Boolean> = _settingsOpen.asStateFlow()
 
     /** One enum instead of four booleans: only one of these is ever open. */
-    enum class Sheet { Rules, SimpleApps, Pairs, IconPack }
+    enum class Sheet { Rules, SimpleApps, Pairs, IconPack, HiddenApps }
 
     private val _sheet = MutableStateFlow<Sheet?>(null)
     val sheet: StateFlow<Sheet?> = _sheet.asStateFlow()
@@ -425,6 +447,26 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         .flatMap { it.items }
         .sortedWith(compareBy({ it.cellY }, { it.cellX }))
         .mapNotNull { it.app }
+
+
+    // ---- Desktop mode state ----
+    //
+    // Declared above `init` on purpose: the collector below reads all three,
+    // and a property initialised after an init block is null while it runs.
+
+    /**
+     * The user's explicit choice this session, or null to follow the setting.
+     *
+     * Cleared on folding, so unfolding always starts from the preference again
+     * rather than from a decision made about a previous session.
+     */
+    private val _desktopOverride = MutableStateFlow<Boolean?>(null)
+
+    private val _desktopMode = MutableStateFlow(false)
+    val desktopMode: StateFlow<Boolean> = _desktopMode.asStateFlow()
+
+    /** Cascade position, so two windows opened in a row do not coincide. */
+    private val _windowsOpened = MutableStateFlow(0)
 
     init {
         container.launcherApps.start()
@@ -458,17 +500,47 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             // With no app drawer, an unplaced app is an unreachable app, so
             // the layout has to follow the installed list rather than being
             // built once at install time.
-            container.launcherApps.apps
-                .filter { it.isNotEmpty() }
-                .collect { apps ->
+            // Hiding is part of this loop's input, not just a display
+            // filter: hiding an app has to take its cell away, and unhiding
+            // has to give it one back. Collecting only the app list would
+            // leave both waiting for the next install.
+            combine(
+                container.launcherApps.apps.filter { it.isNotEmpty() },
+                container.settings.settings.map { it.hiddenApps }.distinctUntilChanged(),
+            ) { apps, hidden -> apps to hidden }
+                .collect { (apps, hidden) ->
                     val grid = gridChoice.value
+                    // Seeding takes the visible list; syncing takes the whole
+                    // one, because it is what has to notice that a hidden app
+                    // still holds a cell it should give up.
+                    val visible = apps.filter { it.key !in hidden }
                     // 簡易 is seeded too, so its four slots are never empty on
                     // first run; the user replaces them from settings.
                     for (surface in HomeSurface.entries) {
-                        container.homeLayout.seedIfEmpty(surface, Posture.Folded, apps, grid)
+                        container.homeLayout.seedIfEmpty(surface, Posture.Folded, visible, grid)
                     }
-                    container.homeLayout.syncInstalled(apps, grid)
+                    container.homeLayout.syncInstalled(apps, grid, hidden)
                 }
+        }
+        viewModelScope.launch {
+            // Desktop mode follows the posture unless the user has said
+            // otherwise this session. Folding clears that override: a decision
+            // about one session should not silently govern the next unfold.
+            combine(
+                _window.map { it.layoutMode }.distinctUntilChanged(),
+                container.settings.settings.map { it.desktopModeOnUnfold }.distinctUntilChanged(),
+                _desktopOverride,
+            ) { mode, onUnfold, override ->
+                Triple(mode, onUnfold, override)
+            }.collect { (mode, onUnfold, override) ->
+                if (mode != LayoutMode.Expanded) {
+                    if (_desktopOverride.value != null) _desktopOverride.value = null
+                    _desktopMode.value = false
+                    _windowsOpened.value = 0
+                    return@collect
+                }
+                _desktopMode.value = override ?: onUnfold
+            }
         }
         viewModelScope.launch {
             // The unfolded arrangement is created from the folded one the
@@ -560,7 +632,33 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun dismissSuggestion() = container.contextEngine.dismissSuggestion()
 
     fun launch(entry: AppEntry) {
-        container.launcherApps.launch(entry)
+        // In desktop mode an app opens as a window rather than filling the
+        // screen — but only where the device honours a launch rectangle. When
+        // it does not, optionsFor returns null and this is an ordinary launch,
+        // which is exactly what the user was already told would happen.
+        val options = if (_desktopMode.value) {
+            container.desktopLauncher.optionsFor(_windowsOpened.value)
+                ?.also { _windowsOpened.value = _windowsOpened.value + 1 }
+        } else {
+            null
+        }
+        container.launcherApps.launch(entry, null, options)
+    }
+
+    // ---- Desktop mode ----
+
+    fun setDesktopMode(active: Boolean) {
+        _desktopOverride.value = active
+        _desktopMode.value = active
+        if (!active) _windowsOpened.value = 0
+    }
+
+    fun freeformState(): FreeformState = container.desktopLauncher.state()
+
+    fun openFreeformSettings() = container.desktopLauncher.openFreeformSettings()
+
+    fun setDesktopModeOnUnfold(enabled: Boolean) = viewModelScope.launch {
+        container.settings.setDesktopModeOnUnfold(enabled)
     }
 
     fun launch(item: HomeItem) {
@@ -608,6 +706,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun launchShortcut(shortcut: AppShortcut) {
         dismissLongPress()
         container.shortcuts.launch(shortcut)
+    }
+
+    /**
+     * Takes an app off the home screen, or puts it back.
+     *
+     * Not a lock and not a secret: the app stays installed, keeps running, and
+     * is still reachable from recents, from a notification, and from any other
+     * launcher. What this removes is the icon.
+     */
+    fun setAppHidden(appKey: String, hidden: Boolean) = viewModelScope.launch {
+        container.settings.setAppHidden(appKey, hidden)
+    }
+
+    fun setBadgeStyle(style: BadgeStyle) = viewModelScope.launch {
+        container.settings.setBadgeStyle(style)
+    }
+
+    fun setDockShape(shape: DockShape) = viewModelScope.launch {
+        container.settings.setDockShape(shape)
     }
 
     /** 簡易 — the user picks exactly which four apps appear. */
@@ -829,6 +946,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { container.settings.setGridChoice(choice) }
 
     // ---- Page management ----
+
+    private val _quickPanelOpen = MutableStateFlow(false)
+    val quickPanelOpen: StateFlow<Boolean> = _quickPanelOpen.asStateFlow()
+
+    fun setQuickPanelOpen(open: Boolean) {
+        _quickPanelOpen.value = open
+    }
+
+    fun quickControls(): QuickController = container.quickControls
 
     private val _pageOverviewOpen = MutableStateFlow(false)
     val pageOverviewOpen: StateFlow<Boolean> = _pageOverviewOpen.asStateFlow()
