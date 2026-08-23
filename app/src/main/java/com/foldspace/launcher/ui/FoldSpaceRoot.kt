@@ -39,6 +39,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.foldspace.launcher.core.launcher.AppEntry
 import com.foldspace.launcher.spaces.SpaceId
 import com.foldspace.launcher.ui.components.FoldCard
+import com.foldspace.launcher.ui.components.LabelOnWallpaper
+import com.foldspace.launcher.ui.components.TextAction
 import com.foldspace.launcher.ui.components.Pill
 import com.foldspace.launcher.home.HomeItem
 import com.foldspace.launcher.home.HomeItemType
@@ -58,6 +60,7 @@ import com.foldspace.launcher.ui.pairs.PairEditor
 import com.foldspace.launcher.ui.rules.RuleEditor
 import com.foldspace.launcher.ui.home.BookHome
 import com.foldspace.launcher.ui.home.HomeDock
+import com.foldspace.launcher.ui.home.PageOverview
 import com.foldspace.launcher.ui.home.PagedHome
 import com.foldspace.launcher.ui.home.SimpleHome
 import com.foldspace.launcher.ui.home.GestureZones
@@ -112,6 +115,7 @@ fun FoldSpaceRoot(
     val iconPack by viewModel.iconPack.collectAsStateWithLifecycle()
     val transientMessage by viewModel.transientMessage.collectAsStateWithLifecycle()
     val longPressItem by viewModel.longPressItem.collectAsStateWithLifecycle()
+    val pageOverviewOpen by viewModel.pageOverviewOpen.collectAsStateWithLifecycle()
 
     val openFolder = remember(openFolderId, homeLayout) {
         openFolderId?.let { id ->
@@ -136,7 +140,8 @@ fun FoldSpaceRoot(
     val bodyPadding = PaddingValues(bottom = systemPadding.calculateBottomPadding())
 
     val anyOverlayOpen = drawerOpen || notificationCenterOpen || settingsOpen ||
-        openFolder != null || widgetPickerOpen || sheet != null || longPressItem != null
+        openFolder != null || widgetPickerOpen || sheet != null || longPressItem != null ||
+        pageOverviewOpen
 
     // Back on a launcher means "close whatever is open", never "leave".
     BackHandler(enabled = anyOverlayOpen || editing) {
@@ -147,6 +152,7 @@ fun FoldSpaceRoot(
         viewModel.closeWidgetPicker()
         viewModel.closeSheet()
         viewModel.dismissLongPress()
+        viewModel.setPageOverviewOpen(false)
         viewModel.setEditing(false)
     }
 
@@ -157,7 +163,9 @@ fun FoldSpaceRoot(
     Box(
         Modifier
             .fillMaxSize()
-            .background(tokens.scrim.copy(alpha = tokens.scrim.alpha * 0.85f)),
+            // Labels carry their own shadow now, so the wallpaper no
+            // longer has to be dimmed into legibility.
+            .background(tokens.scrim.copy(alpha = tokens.scrim.alpha * 0.35f)),
     ) {
         // §11 — the Power Dock replaces the home surface entirely while
         // charging, and unplugging restores whatever Space was showing.
@@ -182,6 +190,8 @@ fun FoldSpaceRoot(
                 onMoveItem = viewModel::moveItem,
                 onDropOnto = viewModel::dropOnto,
                 onToggleEditing = { viewModel.setEditing(!editing) },
+                onOpenPages = { viewModel.setPageOverviewOpen(true) },
+                onBeginEditing = { viewModel.setEditing(true) },
                 onLongPressEmpty = viewModel::onLongPressEmptyCell,
                 onResizeWidget = viewModel::resizeWidget,
                 onRemoveItem = viewModel::removeItem,
@@ -316,6 +326,20 @@ fun FoldSpaceRoot(
             )
         }
 
+        Overlay(visible = pageOverviewOpen) {
+            PageOverview(
+                pages = homeLayout.pages,
+                grid = homeLayout.grid,
+                currentPage = 0,
+                onMovePage = viewModel::movePage,
+                onDeletePage = viewModel::deletePage,
+                onAddPage = viewModel::addPage,
+                onOpenPage = { viewModel.setPageOverviewOpen(false) },
+                onDismiss = { viewModel.setPageOverviewOpen(false) },
+                contentPadding = systemPadding,
+            )
+        }
+
         Overlay(visible = sheet == LauncherViewModel.Sheet.Rules) {
             RuleEditor(
                 rules = state.settings.automationRules,
@@ -444,6 +468,8 @@ private fun HomeScaffold(
     onMoveItem: (HomeItem, Int, Int, Int) -> Unit,
     onDropOnto: (HomeItem, HomeItem) -> Unit,
     onToggleEditing: () -> Unit,
+    onOpenPages: () -> Unit,
+    onBeginEditing: () -> Unit,
     onLongPressEmpty: (Int, Int, Int) -> Unit,
     onResizeWidget: (HomeItem, Int, Int) -> Unit,
     onRemoveItem: (HomeItem) -> Unit,
@@ -486,6 +512,7 @@ private fun HomeScaffold(
                 onSelectSpace = onSelectSpace,
                 onOpenNotifications = onOpenNotifications,
                 onOpenSettings = onOpenSettings,
+                onOpenPages = onOpenPages,
                 topPadding = contentPadding.calculateTopPadding(),
             )
 
@@ -522,6 +549,7 @@ private fun HomeScaffold(
                 onMove = onMoveItem,
                 onDropOnto = onDropOnto,
                 onLongPressEmpty = onLongPressEmpty,
+                onBeginEditing = onBeginEditing,
                 onResizeWidget = onResizeWidget,
                 onRemoveItem = onRemoveItem,
                 onCellMeasured = onCellMeasured,
@@ -578,6 +606,7 @@ private fun LauncherHeader(
     onSelectSpace: (SpaceId) -> Unit,
     onOpenNotifications: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenPages: () -> Unit,
     topPadding: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
 ) {
@@ -603,32 +632,37 @@ private fun LauncherHeader(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = if (editing) "編輯中 · 長按拖曳" else headerClockFormat.format(now),
-                style = MaterialTheme.typography.titleMedium,
-                color = if (editing) tokens.accent else tokens.textPrimary,
-                modifier = Modifier.weight(1f),
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = if (editing) "編輯中" else headerClockFormat.format(now),
+                    style = MaterialTheme.typography.displayMedium.merge(LabelOnWallpaper),
+                    color = if (editing) tokens.accent else tokens.textPrimary,
+                    maxLines = 1,
+                )
+                Text(
+                    text = if (editing) "長按拖曳，拉角落改大小" else headerDateFormat.format(now),
+                    style = MaterialTheme.typography.bodySmall.merge(LabelOnWallpaper),
+                    color = tokens.textSecondary,
+                    maxLines = 1,
+                )
+            }
 
             val unread = state.notifications.items.size
-            Text(
-                text = if (unread > 0) "通知 $unread" else "通知",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (unread > 0) tokens.accent else tokens.textMuted,
-                modifier = Modifier.clickable(onClick = onOpenNotifications).padding(6.dp),
-            )
-            Text(
+            if (editing) {
+                TextAction(text = "頁面", onClick = onOpenPages)
+            } else {
+                TextAction(
+                    text = if (unread > 0) "通知 $unread" else "通知",
+                    onClick = onOpenNotifications,
+                    color = if (unread > 0) tokens.accent else tokens.textMuted,
+                )
+            }
+            TextAction(
                 text = if (editing) "完成" else "編輯",
-                style = MaterialTheme.typography.labelSmall,
+                onClick = onToggleEditing,
                 color = if (editing) tokens.accent else tokens.textMuted,
-                modifier = Modifier.clickable(onClick = onToggleEditing).padding(6.dp),
             )
-            Text(
-                text = "設定",
-                style = MaterialTheme.typography.labelSmall,
-                color = tokens.textMuted,
-                modifier = Modifier.clickable(onClick = onOpenSettings).padding(6.dp),
-            )
+            TextAction(text = "設定", onClick = onOpenSettings, color = tokens.textMuted)
         }
 
         Spacer(Modifier.height(6.dp))
@@ -652,7 +686,8 @@ private fun LauncherHeader(
     }
 }
 
-private val headerClockFormat = SimpleDateFormat("HH:mm  EEE M/d", Locale.getDefault())
+private val headerClockFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+private val headerDateFormat = SimpleDateFormat("EEEE M月d日", Locale.getDefault())
 
 @Composable
 private fun SuggestionBanner(

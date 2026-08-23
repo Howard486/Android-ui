@@ -101,7 +101,7 @@ fun AppSearchOverlay(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(tokens.scrim)
+            .background(tokens.overlayScrim())
             .padding(contentPadding)
             .padding(horizontal = 16.dp),
     ) {

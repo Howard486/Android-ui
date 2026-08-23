@@ -46,7 +46,7 @@ fun IconPackPicker(
     Column(
         modifier
             .fillMaxSize()
-            .background(tokens.scrim.copy(alpha = 0.96f))
+            .background(tokens.overlayScrim())
             .padding(contentPadding)
             .padding(horizontal = 20.dp),
     ) {

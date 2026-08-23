@@ -385,6 +385,56 @@ class HomeLayoutRepository(
         )
     }
 
+    /**
+     * Reorders the pages of one surface.
+     *
+     * `order[newIndex] = oldIndex`, as [PageOrder] produces. Both tables are
+     * renumbered through their own two-phase park; `pageIndex` is part of a
+     * primary key in one and of a unique index in the other, so a direct
+     * rewrite would abort partway.
+     */
+    suspend fun reorderPages(surface: HomeSurface, posture: Posture, order: List<Int>) {
+        if (PageOrder.changes(order).isEmpty()) return
+        dao.reorderPages(surface.key, posture.key, order)
+        pageDao.reorder(surface.key, posture.key, order)
+    }
+
+    /**
+     * Deletes a page, and only an empty one.
+     *
+     * A page's items would have to go somewhere, and quietly relocating
+     * someone's icons as a side effect of deleting a page is the kind of
+     * silent rearrangement this project has already had to apologise for.
+     * Returns false when the page still holds something, so the UI can say so.
+     */
+    suspend fun deletePage(
+        surface: HomeSurface,
+        posture: Posture,
+        pageIndex: Int,
+    ): Boolean {
+        val occupied = dao.getLayout(surface.key, posture.key).any {
+            it.container == HomeItemEntity.CONTAINER_DESKTOP && it.pageIndex == pageIndex
+        }
+        if (occupied) return false
+
+        pageDao.delete(surface.key, posture.key, pageIndex)
+
+        // Everything after it shifts down, or the gap becomes a blank page
+        // nobody asked for.
+        val remaining = highestPageIndex(surface, posture) + 1
+        if (remaining > pageIndex) {
+            reorderPages(surface, posture, PageOrder.removed(remaining, pageIndex))
+        }
+        return true
+    }
+
+    private suspend fun highestPageIndex(surface: HomeSurface, posture: Posture): Int = maxOf(
+        pageDao.getPages(surface.key, posture.key).maxOfOrNull { it.pageIndex } ?: -1,
+        dao.getLayout(surface.key, posture.key)
+            .filter { it.container == HomeItemEntity.CONTAINER_DESKTOP }
+            .maxOfOrNull { it.pageIndex } ?: -1,
+    )
+
     suspend fun removePage(surface: HomeSurface, posture: Posture, pageIndex: Int) =
         pageDao.delete(surface.key, posture.key, pageIndex)
 

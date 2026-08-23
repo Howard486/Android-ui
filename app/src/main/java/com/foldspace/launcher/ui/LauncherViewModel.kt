@@ -29,6 +29,7 @@ import com.foldspace.launcher.pairs.AppPair
 import com.foldspace.launcher.ui.icons.IconPackInfo
 import com.foldspace.launcher.ui.icons.LoadedIconPack
 import com.foldspace.launcher.home.PageKind
+import com.foldspace.launcher.home.PageOrder
 import com.foldspace.launcher.home.Posture
 import com.foldspace.launcher.work.WorkItemsDeriver
 import com.foldspace.launcher.work.WorkItemsState
@@ -826,6 +827,43 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setGridChoice(choice: GridChoice) =
         viewModelScope.launch { container.settings.setGridChoice(choice) }
+
+    // ---- Page management ----
+
+    private val _pageOverviewOpen = MutableStateFlow(false)
+    val pageOverviewOpen: StateFlow<Boolean> = _pageOverviewOpen.asStateFlow()
+
+    fun setPageOverviewOpen(open: Boolean) {
+        _pageOverviewOpen.value = open
+    }
+
+    /** Drag-to-reorder in the overview. [from] and [to] are visible positions. */
+    fun movePage(from: Int, to: Int) = viewModelScope.launch {
+        val pages = homeLayout.value.pages
+        if (from !in pages.indices || to !in pages.indices) return@launch
+        container.homeLayout.reorderPages(
+            surface = HomeSurface.of(state.value.space),
+            posture = currentPosture(),
+            order = PageOrder.move(pages.size, from, to),
+        )
+    }
+
+    fun addPage() = viewModelScope.launch {
+        container.homeLayout.addPage(
+            surface = HomeSurface.of(state.value.space),
+            posture = currentPosture(),
+            kind = PageKind.Grid,
+        )
+    }
+
+    fun deletePage(pageIndex: Int) = viewModelScope.launch {
+        val deleted = container.homeLayout.deletePage(
+            surface = HomeSurface.of(state.value.space),
+            posture = currentPosture(),
+            pageIndex = pageIndex,
+        )
+        if (!deleted) _transientMessage.value = "這一頁還有東西，先清空才能刪除"
+    }
 
     fun refreshFeed(force: Boolean = false) = viewModelScope.launch {
         container.feed.refreshIfStale(force)

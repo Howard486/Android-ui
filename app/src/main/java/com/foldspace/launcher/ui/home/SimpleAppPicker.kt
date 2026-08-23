@@ -65,7 +65,7 @@ fun SimpleAppPicker(
     Column(
         modifier
             .fillMaxSize()
-            .background(tokens.scrim.copy(alpha = 0.96f))
+            .background(tokens.overlayScrim())
             .padding(contentPadding)
             .padding(horizontal = 20.dp),
     ) {
@@ -150,7 +150,7 @@ fun SimpleAppPicker(
                             Text(
                                 text = (position + 1).toString(),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = tokens.scrim.copy(alpha = 1f),
+                                color = tokens.onAccent,
                             )
                         }
                     }

@@ -46,12 +46,14 @@ import androidx.compose.ui.unit.dp
 import com.foldspace.launcher.home.HomeItem
 import com.foldspace.launcher.home.HomeItemType
 import com.foldspace.launcher.home.HomeLayout
+import com.foldspace.launcher.home.iconSizeFor
 import com.foldspace.launcher.home.HomePage
 import com.foldspace.launcher.home.PageKind
 import com.foldspace.launcher.notifications.NotificationSummary
 import com.foldspace.launcher.spaces.SpaceDensity
 import com.foldspace.launcher.ui.components.AppIcon
 import com.foldspace.launcher.ui.components.AppTile
+import com.foldspace.launcher.ui.components.LabelOnWallpaper
 import com.foldspace.launcher.ui.icons.Squircle
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 import com.foldspace.launcher.ui.widgets.WidgetCell
@@ -88,6 +90,7 @@ fun PagedHome(
     onMove: (item: HomeItem, page: Int, cellX: Int, cellY: Int) -> Unit,
     onDropOnto: (moving: HomeItem, target: HomeItem) -> Unit,
     onLongPressEmpty: (page: Int, cellX: Int, cellY: Int) -> Unit,
+    onBeginEditing: () -> Unit,
     onResizeWidget: (item: HomeItem, spanX: Int, spanY: Int) -> Unit,
     onRemoveItem: (HomeItem) -> Unit,
     onCellMeasured: (widthDp: Int, heightDp: Int) -> Unit,
@@ -163,6 +166,7 @@ fun PagedHome(
                         onLongPress = onLongPress,
                         onOpenFolder = onOpenFolder,
                         onLongPressEmpty = onLongPressEmpty,
+                        onBeginEditing = onBeginEditing,
                         onMove = onMove,
                         onResizeWidget = onResizeWidget,
                         onRemoveItem = onRemoveItem,
@@ -174,7 +178,18 @@ fun PagedHome(
                             if (current != null) {
                                 val cell = current.targetCell
                                 val target = current.targetItem
+                                val crossedPage = current.targetPage != page.index
                                 when {
+                                    // A cell measured on the page you started
+                                    // from means nothing once the pager has
+                                    // moved on, so a cross-page drop takes the
+                                    // first free cell instead of a coordinate
+                                    // from the wrong geometry.
+                                    crossedPage -> layout.firstFreeCell(current.targetPage)
+                                        ?.let { (x, y) ->
+                                            onMove(current.item, current.targetPage, x, y)
+                                        }
+
                                     target != null && target.id != current.item.id ->
                                         onDropOnto(current.item, target)
 
@@ -198,18 +213,24 @@ fun PagedHome(
             }
         }
 
-        if (gridPages.size + leadingCount + trailingCount > 1) {
-            PageDots(
-                leading = layout.leading,
-                gridPages = gridPages,
-                trailingCount = trailingCount,
-                selected = pagerState.currentPage,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 10.dp),
-            )
-        } else {
-            Spacer(Modifier.height(20.dp))
+        // The row is always the same height, whether or not it has dots in
+        // it: the dock used to shift about 7dp between the one-page and
+        // many-page states.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(DOT_ROW_HEIGHT),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (gridPages.size + leadingCount + trailingCount > 1) {
+                PageDots(
+                    leading = layout.leading,
+                    gridPages = gridPages,
+                    trailingCount = trailingCount,
+                    selected = pagerState.currentPage,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
 
         // The dock sits under every page, the way iOS's does — it is outside
@@ -245,6 +266,7 @@ private fun CellGrid(
     onLongPress: (HomeItem) -> Unit,
     onOpenFolder: (HomeItem) -> Unit,
     onLongPressEmpty: (page: Int, cellX: Int, cellY: Int) -> Unit,
+    onBeginEditing: () -> Unit,
     onMove: (item: HomeItem, page: Int, cellX: Int, cellY: Int) -> Unit,
     onResizeWidget: (item: HomeItem, spanX: Int, spanY: Int) -> Unit,
     onRemoveItem: (HomeItem) -> Unit,
@@ -307,8 +329,19 @@ private fun CellGrid(
         pagerState.animateScrollToPage(next)
     }
 
-    val dragModifier = Modifier.pointerInput(page, layout.grid, editing) {
+    // One owner for the long press.
+    //
+    // AppTile used to install its own `combinedClickable(onLongClick = ...)`,
+    // and Compose gives children the pointer first — so the tile consumed the
+    // gesture and this detector never started. Dragging an app was dead.
+    // The tile now leaves long-press alone on the grid, and movement is what
+    // separates the two meanings: press and move is a drag, press and release
+    // is the action sheet.
+    val dragModifier = Modifier.pointerInput(page, layout.grid) {
         var position = Offset.Zero
+        var travel = Offset.Zero
+        var pressed: HomeItem? = null
+        var moved = false
 
         fun cellAt(offset: Offset): Pair<Int, Int>? {
             if (size.width == 0 || size.height == 0) return null
@@ -320,17 +353,17 @@ private fun CellGrid(
         detectDragGesturesAfterLongPress(
             onDragStart = { offset ->
                 position = offset
+                travel = Offset.Zero
+                moved = false
                 val cell = cellAt(offset)
                 // A span-aware lookup: pressing anywhere under a widget finds
                 // the widget, not just its top-left cell.
                 val item = cell?.let { (x, y) -> page.occupantAt(x, y) }
+                pressed = item
                 if (hapticsEnabled && (item != null || cell != null)) {
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 }
                 when {
-                    // Long-pressing an icon picks it up. Doing so outside
-                    // edit mode is what people expect, so it enters edit
-                    // mode rather than refusing.
                     item != null -> onDragUpdate(DragState(item, offset, pageIndex, cell, null))
 
                     // Long-pressing blank space is the only discoverable
@@ -341,7 +374,15 @@ private fun CellGrid(
             onDrag = { change, amount ->
                 change.consume()
                 position += amount
+                travel += amount
                 val current = drag ?: return@detectDragGesturesAfterLongPress
+                if (!moved && travel.getDistance() > DRAG_SLOP_PX) {
+                    // The first real movement settles it: this is a drag, not
+                    // a long press. Edit mode is what the code always claimed
+                    // to enter here and never did.
+                    moved = true
+                    onBeginEditing()
+                }
                 val cell = cellAt(position)
                 onDragUpdate(
                     current.copy(
@@ -354,8 +395,21 @@ private fun CellGrid(
                     ),
                 )
             },
-            onDragEnd = onDragEnd,
-            onDragCancel = onDragEnd,
+            onDragEnd = {
+                val item = pressed
+                pressed = null
+                if (moved || item == null) {
+                    onDragEnd()
+                } else {
+                    // Held still and released: the user wanted the menu.
+                    onDragUpdate(null)
+                    onLongPress(item)
+                }
+            },
+            onDragCancel = {
+                pressed = null
+                onDragEnd()
+            },
         )
     }
 
@@ -399,9 +453,10 @@ private fun CellGrid(
                     .gridCell(item.cellX, item.cellY, spanX, spanY)
                     .padding(2.dp)
                     .alpha(if (isBeingDragged) 0.25f else 1f)
-                    // Widgets carry their own edit frame; wobbling a live
-                    // widget as well would be noise on top of a control.
-                    .jiggle(active = editing && item.type != HomeItemType.Widget, seed = item.id),
+                    // Only folders wobble now: everything else carries an
+                    // edit frame, and a wobbling frame with drag handles on it
+                    // is a control that will not hold still.
+                    .jiggle(active = editing && item.type == HomeItemType.Folder, seed = item.id),
                 contentAlignment = Alignment.Center,
             ) {
                 HomeCell(
@@ -423,17 +478,18 @@ private fun CellGrid(
                     onLongClick = { onLongPress(item) },
                 )
 
-                // iOS's ✕ badge. Apps and folders get one in edit mode;
-                // widgets get theirs from the resize frame below.
-                if (editing && item.type != HomeItemType.Widget) {
+                // Folders keep the plain ✕; everything placeable gets the
+                // full frame, so an app can be resized the same way a widget
+                // can.
+                if (editing && item.type == HomeItemType.Folder) {
                     RemoveBadge(
                         onClick = { onRemoveItem(item) },
                         modifier = Modifier.align(Alignment.TopStart),
                     )
                 }
 
-                if (editing && item.type == HomeItemType.Widget) {
-                    WidgetEditFrame(
+                if (editing && item.type != HomeItemType.Folder) {
+                    ItemEditFrame(
                         spanX = spanX,
                         spanY = spanY,
                         cellWidthPx = cellWidthPx,
@@ -452,11 +508,17 @@ private fun CellGrid(
                                 .coerceIn(0, layout.grid.columns - spanX)
                             val targetY = (item.cellY + stepY)
                                 .coerceIn(0, layout.grid.rows - spanY)
-                            if (targetX != item.cellX || targetY != item.cellY) {
+                            val moved = targetX != item.cellX || targetY != item.cellY
+                            // Span-aware: landing on a cell a neighbour merely
+                            // covers used to write a silent overlap.
+                            if (moved && layout.rectFits(page.index, item, targetX, targetY, spanX, spanY)) {
                                 onMove(item, page.index, targetX, targetY)
                             }
                         },
                         onRemove = { onRemoveItem(item) },
+                        // Only a widget needs the body drag; an app is dragged
+                        // by the grid, and two handlers would fight.
+                        bodyDraggable = item.type == HomeItemType.Widget,
                     )
                 }
             }
@@ -518,6 +580,15 @@ private fun HomeCell(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
+    // A spanned app is a bigger icon, not a small one adrift in a big box.
+    val iconSizeDp = iconSizeFor(
+        baseDp = density.iconSizeDp,
+        spanX = spanX,
+        spanY = spanY,
+        cellWidthDp = cellWidthDp,
+        cellHeightDp = cellHeightDp,
+    )
+
     when (item.type) {
         HomeItemType.App -> {
             val app = item.app
@@ -530,8 +601,10 @@ private fun HomeCell(
                 AppTile(
                     entry = app,
                     onClick = onClick,
-                    onLongClick = onLongClick,
-                    iconSize = density.iconSizeDp.dp,
+                    // Null on purpose: the grid's detector owns long-press so
+                    // that press-and-move can become a drag.
+                    onLongClick = null,
+                    iconSize = iconSizeDp.dp,
                     badgeCount = badgeCount,
                 )
             }
@@ -550,8 +623,8 @@ private fun HomeCell(
                 AppTile(
                     entry = app.copy(label = item.folderTitle ?: app.label),
                     onClick = onClick,
-                    onLongClick = onLongClick,
-                    iconSize = density.iconSizeDp.dp,
+                    onLongClick = null,
+                    iconSize = iconSizeDp.dp,
                     badgeCount = badgeCount,
                 )
             }
@@ -609,7 +682,7 @@ private fun FolderCell(item: HomeItem, density: SpaceDensity, onClick: () -> Uni
         }
         Text(
             text = item.folderTitle.orEmpty(),
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.merge(LabelOnWallpaper),
             color = tokens.textPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -685,6 +758,15 @@ private fun PageDots(
         }
     }
 }
+
+/**
+ * How far the finger must travel before a long press counts as a drag rather
+ * than a request for the action sheet.
+ */
+private const val DRAG_SLOP_PX = 24f
+
+/** Fixed so the dock does not move when the page count changes. */
+private val DOT_ROW_HEIGHT = 28.dp
 
 /** How close to the edge a drag has to get before the page turns. */
 private const val EDGE_FRACTION = 0.12f

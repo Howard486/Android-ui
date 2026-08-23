@@ -12,6 +12,9 @@ enum class MotionLevel { None, Reduced, Full }
  * §15 Theme tokens. A theme is a *UI token set plus layout preset*, not a
  * wallpaper — so everything the launcher draws reads from here.
  */
+/** How opaque a full-screen overlay's scrim is, whatever the preset. */
+private const val OVERLAY_ALPHA = 0.94f
+
 data class ThemeTokens(
     val id: ThemeId,
     val scrim: Color,
@@ -26,11 +29,28 @@ data class ThemeTokens(
     val cardRadius: Dp,
     val cardOpacity: Float,
     /** §11.4 / §15.2 — heavy blur is a battery cost, so the theme opts in. */
-    val usesBlur: Boolean,
-    val iconCornerRadius: Dp,
     val motion: MotionLevel,
 ) {
     fun surfaceAlpha(): Color = surface.copy(alpha = cardOpacity)
+
+    /**
+     * The scrim behind a full-screen overlay.
+     *
+     * One value, because there were five. `copy(alpha = …)` *replaces* the
+     * token's own alpha rather than scaling it, so the screens that passed
+     * `scrim` raw were 60% black on Minimal while their neighbours were 96%,
+     * and the two families of overlay looked nothing like each other.
+     */
+    fun overlayScrim(): Color = scrim.copy(alpha = maxOf(scrim.alpha, OVERLAY_ALPHA))
+
+    /**
+     * A foreground that reads on [accent].
+     *
+     * Badge text used to be `scrim.copy(alpha = 1f)` — the *scrim* pressed
+     * into service as a foreground colour, which on Executive put near-black
+     * text on a beige accent by accident rather than by choice.
+     */
+    val onAccent: Color get() = Color(0xFF0B0D12)
 }
 
 object Themes {
@@ -48,8 +68,6 @@ object Themes {
         textMuted = Color(0xFF71798A),
         cardRadius = 22.dp,
         cardOpacity = 0.72f,
-        usesBlur = false,
-        iconCornerRadius = 16.dp,
         motion = MotionLevel.Full,
     )
 
@@ -66,8 +84,6 @@ object Themes {
         textMuted = Color(0xFF5F7B78),
         cardRadius = 10.dp,
         cardOpacity = 0.80f,
-        usesBlur = false,
-        iconCornerRadius = 8.dp,
         motion = MotionLevel.Full,
     )
 
@@ -84,8 +100,6 @@ object Themes {
         textMuted = Color(0xFF7E7A72),
         cardRadius = 6.dp,
         cardOpacity = 0.86f,
-        usesBlur = false,
-        iconCornerRadius = 12.dp,
         motion = MotionLevel.Reduced,
     )
 
@@ -102,8 +116,6 @@ object Themes {
         textMuted = Color(0xFF6E6B8A),
         cardRadius = 26.dp,
         cardOpacity = 0.70f,
-        usesBlur = true,
-        iconCornerRadius = 18.dp,
         motion = MotionLevel.Full,
     )
 
@@ -125,8 +137,6 @@ object Themes {
         textMuted = Color(0xFF636A76),
         cardRadius = 14.dp,
         cardOpacity = 1f,
-        usesBlur = false,
-        iconCornerRadius = 14.dp,
         motion = MotionLevel.None,
     )
 

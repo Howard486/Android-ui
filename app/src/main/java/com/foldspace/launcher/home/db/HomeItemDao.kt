@@ -119,6 +119,44 @@ abstract class HomeItemDao {
         rows.forEach { update(it) }
     }
 
+    @Query(
+        """
+        UPDATE home_items SET pageIndex = :toPage
+        WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey
+          AND container = -1 AND pageIndex = :fromPage
+        """,
+    )
+    abstract suspend fun movePageItems(
+        surfaceKey: String,
+        postureKey: String,
+        fromPage: Int,
+        toPage: Int,
+    )
+
+    /**
+     * Renumbers whole pages, in the order given.
+     *
+     * `order[newIndex] = oldIndex`. Every page that moves is parked on a
+     * negative scratch index first: `pageIndex` is part of the unique index,
+     * so writing final numbers one page at a time would collide with a page
+     * that has not moved yet and abort the transaction halfway. Same shape as
+     * [repackDesktop], for the same reason.
+     */
+    @Transaction
+    open suspend fun reorderPages(surfaceKey: String, postureKey: String, order: List<Int>) {
+        val moves = order.withIndex()
+            .filter { (newIndex, oldIndex) -> newIndex != oldIndex }
+            .map { (newIndex, oldIndex) -> oldIndex to newIndex }
+        if (moves.isEmpty()) return
+
+        moves.forEach { (oldPage, _) ->
+            movePageItems(surfaceKey, postureKey, oldPage, REORDER_PARK_BASE - oldPage)
+        }
+        moves.forEach { (oldPage, newPage) ->
+            movePageItems(surfaceKey, postureKey, REORDER_PARK_BASE - oldPage, newPage)
+        }
+    }
+
     /**
      * Moves an item to a cell, swapping with whatever is already there.
      *
@@ -291,5 +329,12 @@ abstract class HomeItemDao {
          * in progress cannot land on a cell a folder member is holding.
          */
         const val REPACK_PAGE = -98
+
+        /**
+         * Reordering parks each page at `REORDER_PARK_BASE - oldIndex`, so
+         * parked pages stay distinct from each other and from every other
+         * sentinel above.
+         */
+        const val REORDER_PARK_BASE = -1000
     }
 }

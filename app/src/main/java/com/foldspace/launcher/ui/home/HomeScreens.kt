@@ -39,7 +39,6 @@ import com.foldspace.launcher.ui.LauncherUiState
 import com.foldspace.launcher.ui.cards.ClockCard
 import com.foldspace.launcher.ui.cards.NativeCard
 import com.foldspace.launcher.ui.components.AppTile
-import com.foldspace.launcher.ui.dock.Dock
 
 /**
  * §4.3 Half-open / Tabletop — content above the hinge, controls below it.
@@ -95,12 +94,12 @@ fun TabletopHome(
                 .weight(1f - topWeight),
             verticalArrangement = Arrangement.Bottom,
         ) {
-            Dock(
+            HomeDock(
                 apps = state.dockApps().take(TABLETOP_DOCK_SLOTS),
                 notifications = state.notifications,
+                density = state.spaceConfig.density,
                 onLaunch = onLaunch,
                 onLongPress = onLongPress,
-                density = state.spaceConfig.density,
             )
             Spacer(Modifier.height(12.dp))
         }
@@ -175,12 +174,12 @@ fun BookHome(
                 }
             }
             Spacer(Modifier.height(10.dp))
-            Dock(
+            HomeDock(
                 apps = state.dockApps().take(TABLETOP_DOCK_SLOTS),
                 notifications = state.notifications,
+                density = state.spaceConfig.density,
                 onLaunch = onLaunch,
                 onLongPress = onLongPress,
-                density = state.spaceConfig.density,
             )
         }
     }

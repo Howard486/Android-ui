@@ -274,6 +274,41 @@ data class HomeLayout(
     }
 
     /**
+     * Whether [item] would fit with its top-left corner at an arbitrary cell.
+     *
+     * [spanFits] only ever asks about growing in place. Moving needs the same
+     * question at a new anchor, and nothing asked it: `HomeItemDao.itemAt`
+     * matches the anchor cell alone, so dropping an app on a cell that a 2x2
+     * widget *covers but does not anchor* wrote a silent overlap — after which
+     * whichever item sorted first won every hit test and the other became
+     * impossible to pick up.
+     */
+    fun rectFits(
+        pageIndex: Int,
+        item: HomeItem,
+        cellX: Int,
+        cellY: Int,
+        spanX: Int = item.spanX,
+        spanY: Int = item.spanY,
+    ): Boolean {
+        if (cellX < 0 || cellY < 0 || spanX < 1 || spanY < 1) return false
+        if (cellX + spanX > grid.columns) return false
+        if (cellY + spanY > grid.rows) return false
+
+        val others = pages.firstOrNull { it.index == pageIndex }
+            ?.items
+            ?.filter { it.id != item.id }
+            .orEmpty()
+
+        for (y in cellY until cellY + spanY) {
+            for (x in cellX until cellX + spanX) {
+                if (others.any { it.covers(x, y) }) return false
+            }
+        }
+        return true
+    }
+
+    /**
      * The largest span at or below the one asked for that actually fits.
      *
      * The UI clamps as the handle is dragged, but a commit goes through here
@@ -338,6 +373,38 @@ data class HomeLayout(
         }
     }
 }
+
+/**
+ * How large an icon should be drawn inside a cell it may span.
+ *
+ * A spanned app used to render as one base-size icon floating in a large empty
+ * box, because `AppTile` was handed a fixed size regardless of how many cells
+ * the item held. The icon grows with the *smaller* of the two spans — a 3x1
+ * item is a wide box, not a big icon — and is then capped to what the box can
+ * actually hold once the label has its room.
+ */
+fun iconSizeFor(
+    baseDp: Int,
+    spanX: Int,
+    spanY: Int,
+    cellWidthDp: Int,
+    cellHeightDp: Int,
+): Int {
+    val columns = spanX.coerceAtLeast(1)
+    val rows = spanY.coerceAtLeast(1)
+    val wanted = baseDp.coerceAtLeast(1) * minOf(columns, rows)
+
+    // Before the grid has been measured there is nothing to cap against.
+    if (cellWidthDp <= 0 || cellHeightDp <= 0) return wanted
+
+    val boxWidth = cellWidthDp * columns
+    val boxHeight = cellHeightDp * rows - LABEL_ALLOWANCE_DP
+    val fits = minOf(boxWidth, boxHeight)
+    return wanted.coerceIn(1, fits.coerceAtLeast(1))
+}
+
+/** Room kept for the label and the tile's own padding, in dp. */
+private const val LABEL_ALLOWANCE_DP = 26
 
 /** A cell assignment: which page, and where on it. */
 data class CellSlot(val pageIndex: Int, val cellX: Int, val cellY: Int)

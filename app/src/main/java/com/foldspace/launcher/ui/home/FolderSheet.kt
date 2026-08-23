@@ -56,7 +56,7 @@ fun FolderSheet(
     Box(
         modifier
             .fillMaxSize()
-            .background(tokens.scrim.copy(alpha = 0.92f))
+            .background(tokens.overlayScrim())
             .clickable(onClick = onDismiss)
             .padding(contentPadding)
             .padding(horizontal = 20.dp),

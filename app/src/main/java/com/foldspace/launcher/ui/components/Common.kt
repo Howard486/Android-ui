@@ -3,6 +3,7 @@ package com.foldspace.launcher.ui.components
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,7 +23,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -73,7 +77,7 @@ fun CardTitle(text: String, modifier: Modifier = Modifier) {
 fun AppTile(
     entry: AppEntry,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
     iconSize: Dp = 52.dp,
     showLabel: Boolean = true,
@@ -83,7 +87,17 @@ fun AppTile(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            // A null onLongClick leaves the long press to whatever is above
+            // this tile. That matters on the home grid: `combinedClickable`
+            // consumes the gesture before the grid's drag detector sees it,
+            // which is why dragging an app stopped working at all.
+            .then(
+                if (onLongClick == null) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                },
+            )
             .padding(vertical = 6.dp, horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -102,7 +116,7 @@ fun AppTile(
                     Text(
                         text = if (badgeCount > 99) "99+" else badgeCount.toString(),
                         style = MaterialTheme.typography.labelSmall,
-                        color = tokens.scrim.copy(alpha = 1f),
+                        color = tokens.onAccent,
                         maxLines = 1,
                     )
                 }
@@ -112,7 +126,7 @@ fun AppTile(
         if (showLabel) {
             Text(
                 text = entry.label,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.merge(LabelOnWallpaper),
                 color = tokens.textPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -181,6 +195,21 @@ fun AppIcon(entry: AppEntry, size: Dp) {
         }
     }
 }
+
+/**
+ * The shadow that makes a label readable on someone else's wallpaper.
+ *
+ * Labels had none, so legibility rested entirely on dimming the wallpaper by
+ * half — which is why the wallpaper barely showed. A shadow costs nothing and
+ * is what lets the scrim come down.
+ */
+val LabelOnWallpaper = TextStyle(
+    shadow = Shadow(
+        color = Color.Black.copy(alpha = 0.65f),
+        offset = Offset(0f, 1f),
+        blurRadius = 4f,
+    ),
+)
 
 /** Small pill used for tiers, statuses and Space names. */
 @Composable

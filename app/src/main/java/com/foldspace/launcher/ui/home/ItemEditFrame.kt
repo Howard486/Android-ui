@@ -16,27 +16,29 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 import kotlin.math.roundToInt
 
 /**
- * The edit-mode overlay on a widget: a frame, two resize handles, a remove
- * button.
+ * The edit-mode overlay on a placed item: a frame, two resize handles, a
+ * remove button.
  *
- * It exists because a widget is an `AndroidView` — it swallows touches, so the
- * grid's own long-press-to-drag never reaches it and there is otherwise no way
- * at all to act on a placed widget. The overlay also sinks taps, so tapping a
- * widget while editing adjusts it rather than activating it.
+ * Widgets need it because an `AndroidView` swallows touches, so the grid's own
+ * long-press-to-drag never reaches one and there is otherwise no way at all to
+ * act on a placed widget. Apps need only the resize half — the grid drags them
+ * perfectly well — which is what [bodyDraggable] selects. Installing the body
+ * drag for an app would put two drag handlers on the same pixels.
  *
  * Handles are on the right and bottom edges only. Growing from the top or left
  * would have to move the anchor cell as well as the span, which is a different
- * operation on a fixed grid, and one the user can get by moving the widget and
- * resizing again — which [onMoveBy] now makes possible.
+ * operation on a fixed grid, and one the user can get by moving the item and
+ * resizing again.
  */
 @Composable
-fun WidgetEditFrame(
+fun ItemEditFrame(
     spanX: Int,
     spanY: Int,
     cellWidthPx: Float,
@@ -46,9 +48,9 @@ fun WidgetEditFrame(
     onMoveBy: (cellsX: Int, cellsY: Int) -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
+    bodyDraggable: Boolean = true,
 ) {
     val tokens = FoldSpaceTheme.tokens
-    val drag = remember { HandleGesture() }
 
     Box(modifier.fillMaxSize()) {
         Box(
@@ -56,37 +58,7 @@ fun WidgetEditFrame(
                 .fillMaxSize()
                 .border(1.5.dp, tokens.accent, RoundedCornerShape(12.dp))
                 .background(tokens.accent.copy(alpha = 0.06f))
-                // A tap in edit mode belongs to the frame, not to the widget.
-                .pointerInput(Unit) { detectTapGestures { } }
-                // Dragging the frame body moves the widget. The grid's own
-                // long-press-drag can never reach a widget — an AndroidView
-                // swallows the touch before it gets there — so without this
-                // there is no way at all to move one.
-                .pointerInput(cellWidthPx, cellHeightPx) {
-                    detectDragGestures(
-                        onDragStart = {
-                            drag.travel = 0f
-                            drag.travelY = 0f
-                        },
-                        onDrag = { change, amount ->
-                            change.consume()
-                            if (cellWidthPx <= 0f || cellHeightPx <= 0f) {
-                                return@detectDragGestures
-                            }
-                            drag.travel += amount.x
-                            drag.travelY += amount.y
-                            val stepX = (drag.travel / cellWidthPx).roundToInt()
-                            val stepY = (drag.travelY / cellHeightPx).roundToInt()
-                            if (stepX == 0 && stepY == 0) return@detectDragGestures
-                            // Consume whole cells as they are crossed, so the
-                            // widget tracks the finger instead of jumping the
-                            // whole distance when the drag ends.
-                            drag.travel -= stepX * cellWidthPx
-                            drag.travelY -= stepY * cellHeightPx
-                            onMoveBy(stepX, stepY)
-                        },
-                    )
-                },
+                .then(if (bodyDraggable) Modifier.bodyDrag(cellWidthPx, cellHeightPx, onMoveBy) else Modifier),
         )
 
         ResizeHandle(
@@ -122,6 +94,48 @@ fun WidgetEditFrame(
             )
         }
     }
+}
+
+/**
+ * Moving by dragging the frame itself.
+ *
+ * Only widgets get this. An `AndroidView` swallows touches before the grid's
+ * long-press-drag can see them, so for a widget the frame is the only way to
+ * move one at all; an app is dragged by the grid, and installing this as well
+ * would put two drag handlers on the same pixels.
+ */
+private fun Modifier.bodyDrag(
+    cellWidthPx: Float,
+    cellHeightPx: Float,
+    onMoveBy: (cellsX: Int, cellsY: Int) -> Unit,
+): Modifier = composed {
+    val drag = remember { HandleGesture() }
+    this
+        // A tap in edit mode belongs to the frame, not to the widget.
+        .pointerInput(Unit) { detectTapGestures { } }
+        .pointerInput(cellWidthPx, cellHeightPx) {
+            detectDragGestures(
+                onDragStart = {
+                    drag.travel = 0f
+                    drag.travelY = 0f
+                },
+                onDrag = { change, amount ->
+                    change.consume()
+                    if (cellWidthPx <= 0f || cellHeightPx <= 0f) return@detectDragGestures
+                    drag.travel += amount.x
+                    drag.travelY += amount.y
+                    val stepX = (drag.travel / cellWidthPx).roundToInt()
+                    val stepY = (drag.travelY / cellHeightPx).roundToInt()
+                    if (stepX == 0 && stepY == 0) return@detectDragGestures
+                    // Consume whole cells as they are crossed, so the widget
+                    // tracks the finger instead of jumping the whole distance
+                    // when the drag ends.
+                    drag.travel -= stepX * cellWidthPx
+                    drag.travelY -= stepY * cellHeightPx
+                    onMoveBy(stepX, stepY)
+                },
+            )
+        }
 }
 
 /**

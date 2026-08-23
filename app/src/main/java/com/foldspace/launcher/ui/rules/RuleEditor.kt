@@ -69,7 +69,7 @@ fun RuleEditor(
         Column(
             Modifier
                 .fillMaxSize()
-                .background(tokens.scrim.copy(alpha = 0.96f))
+                .background(tokens.overlayScrim())
                 .padding(contentPadding)
                 .padding(horizontal = 20.dp),
         ) {
@@ -228,7 +228,7 @@ private fun RuleSheet(
     Column(
         Modifier
             .fillMaxSize()
-            .background(tokens.scrim.copy(alpha = 0.98f))
+            .background(tokens.overlayScrim())
             .padding(contentPadding)
             .padding(horizontal = 20.dp),
     ) {

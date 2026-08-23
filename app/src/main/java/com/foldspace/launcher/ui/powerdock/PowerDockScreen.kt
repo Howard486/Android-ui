@@ -63,7 +63,7 @@ fun PowerDockScreen(
     Column(
         modifier
             .fillMaxSize()
-            .background(tokens.scrim)
+            .background(tokens.overlayScrim())
             .padding(contentPadding)
             .padding(horizontal = 20.dp)
             // §11.1 — Bedside is deliberately dimmed at the composition level
