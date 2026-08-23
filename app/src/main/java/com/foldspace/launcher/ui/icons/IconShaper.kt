@@ -80,14 +80,15 @@ object IconShaper {
         sizePx: Int,
         key: String,
         tile: Color,
+        fill: Boolean = false,
     ): ImageBitmap? {
         if (drawable == null || sizePx <= 0) return null
 
-        val cacheKey = "$key@$sizePx@${tile.value}"
+        val cacheKey = "$key@$sizePx@${tile.value}@$fill"
         cache.get(cacheKey)?.let { return it }
 
         val rendered = try {
-            rasterise(drawable, sizePx, tile)
+            rasterise(drawable, sizePx, tile, fill)
         } catch (oom: OutOfMemoryError) {
             // Swallowing this silently is how icons turn into letter
             // placeholders with no explanation. Drop the cache and let the
@@ -105,8 +106,13 @@ object IconShaper {
     /** Drops everything; used when the icon pack or theme changes. */
     fun clear() = cache.evictAll()
 
-    private fun rasterise(drawable: Drawable, sizePx: Int, tile: Color): ImageBitmap {
-        val artwork = drawArtwork(drawable, sizePx, tile)
+    private fun rasterise(
+        drawable: Drawable,
+        sizePx: Int,
+        tile: Color,
+        fill: Boolean,
+    ): ImageBitmap {
+        val artwork = drawArtwork(drawable, sizePx, tile, fill)
 
         val output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
@@ -148,8 +154,16 @@ object IconShaper {
         return output.asImageBitmap()
     }
 
-    /** The artwork alone, unmasked, at the icon's final size. */
-    private fun drawArtwork(drawable: Drawable, sizePx: Int, tile: Color): Bitmap {
+    /**
+     * The artwork alone, unmasked, at the icon's final size.
+     *
+     * [fill] covers the whole square rather than insetting onto a tile. That is
+     * right for a photograph the user chose — they picked a picture, not a
+     * logo, and a photo shrunk to 72% of a coloured square looks like a
+     * mistake — and wrong for an app's own legacy icon, which carries its own
+     * silhouette and needs the margin.
+     */
+    private fun drawArtwork(drawable: Drawable, sizePx: Int, tile: Color, fill: Boolean): Bitmap {
         val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
@@ -166,6 +180,8 @@ object IconShaper {
 
             drawable.background?.drawWithin(canvas, bounds)
             drawable.foreground?.drawWithin(canvas, bounds)
+        } else if (fill) {
+            drawable.drawWithin(canvas, Rect(0, 0, sizePx, sizePx))
         } else {
             canvas.drawColor(tile.toArgb())
             val inset = ((sizePx * (1f - LEGACY_INSET)) / 2f).roundToInt()

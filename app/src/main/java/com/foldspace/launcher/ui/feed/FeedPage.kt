@@ -42,6 +42,9 @@ fun FeedPage(
     onOpen: (FeedItem) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    // A slot rather than a parameter: the feed has no business knowing what
+    // usage stats are, and the caller already has them.
+    header: @Composable () -> Unit = {},
 ) {
     val tokens = FoldSpaceTheme.tokens
 
@@ -56,6 +59,7 @@ fun FeedPage(
             .padding(horizontal = 20.dp),
     ) {
         Spacer(Modifier.height(12.dp))
+        header()
 
         when (state) {
             FeedState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

@@ -27,6 +27,7 @@ import com.foldspace.launcher.home.LayoutBackup
 import com.foldspace.launcher.home.LayoutBackupCodec
 import com.foldspace.launcher.pairs.AppPair
 import com.foldspace.launcher.ui.icons.IconPackInfo
+import com.foldspace.launcher.ui.icons.IconOverride
 import com.foldspace.launcher.ui.icons.LoadedIconPack
 import com.foldspace.launcher.home.PageKind
 import com.foldspace.launcher.home.PageOrder
@@ -40,7 +41,9 @@ import com.foldspace.launcher.powerdock.PowerDockResolver
 import com.foldspace.launcher.powerdock.PowerDockState
 import com.foldspace.launcher.settings.FoldSpaceSettings
 import com.foldspace.launcher.desktop.FreeformState
+import com.foldspace.launcher.microsoft.MicrosoftState
 import com.foldspace.launcher.quick.QuickController
+import com.foldspace.launcher.usage.ScreenTimeSummary
 import com.foldspace.launcher.settings.GridChoice
 import com.foldspace.launcher.settings.DockShape
 import com.foldspace.launcher.settings.BadgeStyle
@@ -69,6 +72,18 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import java.util.Calendar
+
+/**
+ * Applies a user-chosen name, if there is one.
+ *
+ * `copy` rather than a wrapper: [AppEntry.searchLabel] is derived at
+ * construction, so copying regenerates it and the renamed app is findable by
+ * its new name rather than only by its old one.
+ */
+private fun AppEntry.renamedBy(overrides: Map<String, IconOverride>): AppEntry {
+    val label = overrides[key]?.label
+    return if (label.isNullOrBlank()) this else copy(label = label)
+}
 
 /** Everything one composition of the launcher needs. */
 data class LauncherUiState(
@@ -179,12 +194,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         LauncherUiState(
             settings = settings,
             window = window,
-            apps = if (settings.hiddenApps.isEmpty()) {
-                apps
-            } else {
-                apps.filter { it.key !in settings.hiddenApps }
-            },
-            allApps = apps,
+            // Renaming is applied where the list is built, once, so that
+            // search, the library, folders, the dock and the taskbar all see
+            // the new name without any of them knowing overrides exist.
+            apps = apps
+                .filter { settings.hiddenApps.isEmpty() || it.key !in settings.hiddenApps }
+                .map { it.renamedBy(settings.iconOverrides) },
+            allApps = apps.map { it.renamedBy(settings.iconOverrides) },
             appsLoading = false,
             notifications = notifications,
             suggestion = suggestion,
@@ -631,7 +647,55 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun dismissSuggestion() = container.contextEngine.dismissSuggestion()
 
+    /**
+     * An app waiting on a fingerprint, or null.
+     *
+     * The prompt itself is raised by the UI, not here: `BiometricPrompt`
+     * attaches to a `FragmentActivity` and a ViewModel has no business holding
+     * one.
+     */
+    private val _pendingUnlock = MutableStateFlow<AppEntry?>(null)
+    val pendingUnlock: StateFlow<AppEntry?> = _pendingUnlock.asStateFlow()
+
+    fun cancelUnlock() {
+        _pendingUnlock.value = null
+    }
+
+    /**
+     * Launches without asking, and says why.
+     *
+     * Used when the device has no fingerprint enrolled and no screen lock:
+     * refusing would leave the app unreachable from its own icon, which is a
+     * worse outcome than an unenforced lock — and going ahead silently would
+     * leave the user believing in a lock that cannot work.
+     */
+    fun unlockUnavailable() {
+        val entry = _pendingUnlock.value ?: return
+        _pendingUnlock.value = null
+        _transientMessage.value = "這台裝置沒有設定螢幕鎖定，App 鎖無法生效"
+        launchNow(entry)
+    }
+
+    /** Called by the UI once the prompt has actually succeeded. */
+    fun completeUnlock() {
+        val entry = _pendingUnlock.value ?: return
+        _pendingUnlock.value = null
+        launchNow(entry)
+    }
+
+    fun setAppLocked(appKey: String, locked: Boolean) = viewModelScope.launch {
+        container.settings.setAppLocked(appKey, locked)
+    }
+
     fun launch(entry: AppEntry) {
+        if (entry.key in container.settings.settings.value.lockedApps) {
+            _pendingUnlock.value = entry
+            return
+        }
+        launchNow(entry)
+    }
+
+    private fun launchNow(entry: AppEntry) {
         // In desktop mode an app opens as a window rather than filling the
         // screen — but only where the device honours a launch rectangle. When
         // it does not, optionsFor returns null and this is an ordinary launch,
@@ -718,6 +782,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setAppHidden(appKey: String, hidden: Boolean) = viewModelScope.launch {
         container.settings.setAppHidden(appKey, hidden)
     }
+
+    fun setIconOverride(appKey: String, label: String?, iconUri: String?) =
+        viewModelScope.launch {
+            container.settings.setIconOverride(IconOverride(appKey, label, iconUri))
+        }
 
     fun setBadgeStyle(style: BadgeStyle) = viewModelScope.launch {
         container.settings.setBadgeStyle(style)
@@ -955,6 +1024,54 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun quickControls(): QuickController = container.quickControls
+
+    // ---- Microsoft ----
+
+    private val _microsoft = MutableStateFlow<MicrosoftState>(MicrosoftState.NotConfigured)
+    val microsoft: StateFlow<MicrosoftState> = _microsoft.asStateFlow()
+
+    /**
+     * Loads on demand, when the page is looked at (§12.1).
+     *
+     * Somebody's calendar is the last thing that should be polled on a timer,
+     * and the second-to-last thing that should be kept in memory when nothing
+     * is displaying it.
+     */
+    fun refreshMicrosoft() = viewModelScope.launch {
+        val clientId = container.settings.settings.value.microsoftClientId
+        if (clientId.isNullOrBlank()) {
+            _microsoft.value = MicrosoftState.NotConfigured
+            return@launch
+        }
+        if (_microsoft.value !is MicrosoftState.Ready) _microsoft.value = MicrosoftState.Loading
+        _microsoft.value = container.microsoft.load(clientId)
+    }
+
+    fun beginMicrosoftSignIn() = viewModelScope.launch {
+        val clientId = container.settings.settings.value.microsoftClientId
+        if (!container.microsoft.beginSignIn(clientId)) {
+            _transientMessage.value = "還沒有設定 Microsoft 用戶端 ID"
+        }
+    }
+
+    fun signOutMicrosoft() = viewModelScope.launch {
+        container.microsoft.signOut()
+        _microsoft.value = MicrosoftState.SignedOut
+    }
+
+    fun setMicrosoftClientId(clientId: String?) = viewModelScope.launch {
+        container.settings.setMicrosoftClientId(clientId)
+        refreshMicrosoft()
+    }
+
+    /**
+     * Today's usage, computed when the feed page is looked at.
+     *
+     * Not a StateFlow: it would mean holding a day of somebody's app history
+     * in memory for as long as the launcher runs, to redraw one card. §12.1
+     * says read on demand, and §16.1 says do not keep it.
+     */
+    fun screenTimeToday(): ScreenTimeSummary = container.screenTime.today()
 
     private val _pageOverviewOpen = MutableStateFlow(false)
     val pageOverviewOpen: StateFlow<Boolean> = _pageOverviewOpen.asStateFlow()

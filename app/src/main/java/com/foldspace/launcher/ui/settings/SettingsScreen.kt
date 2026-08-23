@@ -20,6 +20,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +60,7 @@ fun SettingsScreen(
     onSetBadgeStyle: (BadgeStyle) -> Unit,
     onSetDockShape: (DockShape) -> Unit,
     onSetDesktopModeOnUnfold: (Boolean) -> Unit,
+    onSetMicrosoftClientId: (String?) -> Unit,
     onExportLayout: () -> Unit,
     onImportLayout: () -> Unit,
     onRequestCalendarAccess: () -> Unit,
@@ -358,6 +363,61 @@ fun SettingsScreen(
                 checked = state.settings.desktopModeOnUnfold,
                 onCheckedChange = onSetDesktopModeOnUnfold,
             )
+        }
+
+        item {
+            var clientId by remember(state.settings.microsoftClientId) {
+                mutableStateOf(state.settings.microsoftClientId.orEmpty())
+            }
+            FoldCard(Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Microsoft 帳戶",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.textPrimary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    // The honest version of "not implemented": everything above
+                    // the credential is built and tested; the credential is the
+                    // user's to create and nothing here can do it for them.
+                    text = "工項頁可以顯示你的 Microsoft 行事曆與待辦，但需要一組 Azure 應用程式" +
+                        "註冊的用戶端 ID。到 Azure 入口網站新增一個應用程式，平台選「行動與" +
+                        "桌面應用程式」，重新導向 URI 填 foldspace://auth/microsoft，" +
+                        "並把「允許公用用戶端流程」開啟，然後把用戶端 ID 貼在下面。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                )
+                Spacer(Modifier.height(10.dp))
+                SettingsSearchField(
+                    query = clientId,
+                    onQueryChange = { clientId = it },
+                    placeholder = "用戶端 ID",
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextAction(
+                        text = "儲存",
+                        onClick = { onSetMicrosoftClientId(clientId.trim().takeIf { it.isNotBlank() }) },
+                    )
+                    if (!state.settings.microsoftClientId.isNullOrBlank()) {
+                        TextAction(
+                            text = "清除",
+                            onClick = {
+                                clientId = ""
+                                onSetMicrosoftClientId(null)
+                            },
+                            color = tokens.textMuted,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "只要求讀取權限（行事曆、待辦、基本資料），不會修改任何東西。" +
+                        "權杖用裝置金鑰庫加密後存在本機，行事曆內容不會被儲存。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tokens.textMuted,
+                )
+            }
         }
 
         item {

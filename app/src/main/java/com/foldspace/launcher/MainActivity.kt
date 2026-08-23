@@ -7,10 +7,10 @@ import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
@@ -34,8 +34,13 @@ import kotlinx.coroutines.launch
  *    correct after being killed and relaunched with nothing restored;
  *  - it handles fold changes itself via `configChanges`, so the fold posture
  *    arrives as a [FoldStateTracker] emission rather than as a recreation.
+ *
+ * A `FragmentActivity` rather than a plain `ComponentActivity` for one reason:
+ * `BiometricPrompt` is implemented as a fragment and will not attach to
+ * anything else. It costs the fragment manager and nothing else — no fragment
+ * is ever added by this app.
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private val viewModel: LauncherViewModel by viewModels()
 

@@ -194,7 +194,11 @@ fun HiddenAppsPicker(
  * belong on a list you are ticking.
  */
 @Composable
-internal fun SettingsSearchField(query: String, onQueryChange: (String) -> Unit) {
+internal fun SettingsSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    placeholder: String = "搜尋 App",
+) {
     val tokens = FoldSpaceTheme.tokens
     Box(
         Modifier
@@ -214,7 +218,7 @@ internal fun SettingsSearchField(query: String, onQueryChange: (String) -> Unit)
             decorationBox = { inner ->
                 if (query.isEmpty()) {
                     Text(
-                        text = "搜尋 App",
+                        text = placeholder,
                         style = MaterialTheme.typography.bodyMedium,
                         color = tokens.textMuted,
                     )

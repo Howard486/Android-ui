@@ -78,6 +78,10 @@ dependencies {
 
     // Fold posture (FoldingFeature.State) — spec §4.
     implementation(libs.androidx.window)
+    // App lock. BiometricPrompt needs a FragmentActivity, which is why
+    // MainActivity extends one.
+    implementation(libs.androidx.biometric)
+
     // Settings / Space persistence — spec §16.1.
     implementation(libs.androidx.datastore.preferences)
 
@@ -90,6 +94,9 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 
+    // The platform's org.json is a stub in unit tests that throws on
+    // every call; this gives the Graph parsing tests a real implementation.
+    testImplementation("org.json:json:20240303")
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)

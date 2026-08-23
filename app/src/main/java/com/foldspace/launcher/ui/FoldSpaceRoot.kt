@@ -29,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -58,11 +59,13 @@ import com.foldspace.launcher.ui.settings.HiddenAppsPicker
 import com.foldspace.launcher.ui.icons.IconPackPicker
 import com.foldspace.launcher.ui.components.LocalBadgeStyle
 import com.foldspace.launcher.ui.icons.LocalDayOfMonth
+import com.foldspace.launcher.ui.icons.LocalIconOverrides
 import com.foldspace.launcher.ui.icons.LocalIconPack
 import com.foldspace.launcher.ui.icons.rememberDayOfMonth
 import com.foldspace.launcher.ui.pairs.PairEditor
 import com.foldspace.launcher.ui.rules.RuleEditor
 import com.foldspace.launcher.desktop.FreeformState
+import com.foldspace.launcher.ui.cards.ScreenTimeCard
 import com.foldspace.launcher.ui.desktop.DesktopHome
 import com.foldspace.launcher.ui.quick.QuickPanel
 import com.foldspace.launcher.ui.home.BookHome
@@ -85,6 +88,14 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.result.contract.ActivityResultContracts
 
 /**
  * The launcher's single screen.
@@ -123,6 +134,47 @@ fun FoldSpaceRoot(
     val iconPack by viewModel.iconPack.collectAsStateWithLifecycle()
     val desktopMode by viewModel.desktopMode.collectAsStateWithLifecycle()
     val quickPanelOpen by viewModel.quickPanelOpen.collectAsStateWithLifecycle()
+    val pendingUnlock by viewModel.pendingUnlock.collectAsStateWithLifecycle()
+    val microsoftState by viewModel.microsoft.collectAsStateWithLifecycle()
+
+    // The prompt is raised here rather than in the ViewModel: BiometricPrompt
+    // is a fragment and attaches to a FragmentActivity, which is exactly what
+    // a ViewModel must not hold.
+    val activity = LocalContext.current as? FragmentActivity
+    LaunchedEffect(pendingUnlock) {
+        val entry = pendingUnlock ?: return@LaunchedEffect
+        val host = activity ?: run { viewModel.cancelUnlock(); return@LaunchedEffect }
+
+        val allowed = BiometricManager.Authenticators.BIOMETRIC_WEAK or
+            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        if (BiometricManager.from(host).canAuthenticate(allowed) !=
+            BiometricManager.BIOMETRIC_SUCCESS
+        ) {
+            viewModel.unlockUnavailable()
+            return@LaunchedEffect
+        }
+
+        BiometricPrompt(
+            host,
+            ContextCompat.getMainExecutor(host),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(
+                    result: BiometricPrompt.AuthenticationResult,
+                ) = viewModel.completeUnlock()
+
+                override fun onAuthenticationError(code: Int, message: CharSequence) =
+                    viewModel.cancelUnlock()
+            },
+        ).authenticate(
+            BiometricPrompt.PromptInfo.Builder()
+                .setTitle(entry.label)
+                .setSubtitle("解鎖後開啟")
+                // A negative button is forbidden once DEVICE_CREDENTIAL is
+                // among the allowed authenticators; the builder throws.
+                .setAllowedAuthenticators(allowed)
+                .build(),
+        )
+    }
     val transientMessage by viewModel.transientMessage.collectAsStateWithLifecycle()
     val longPressItem by viewModel.longPressItem.collectAsStateWithLifecycle()
     val pageOverviewOpen by viewModel.pageOverviewOpen.collectAsStateWithLifecycle()
@@ -171,6 +223,11 @@ fun FoldSpaceRoot(
         LocalIconPack provides iconPack,
         LocalDayOfMonth provides rememberDayOfMonth(),
         LocalBadgeStyle provides state.settings.badgeStyle,
+        LocalIconOverrides provides remember(state.settings.iconOverrides) {
+            state.settings.iconOverrides
+                .mapNotNull { (key, value) -> value.iconUri?.let { key to it } }
+                .toMap()
+        },
         LocalHapticsEnabled provides state.settings.hapticsEnabled,
     ) {
     Box(
@@ -215,14 +272,35 @@ fun FoldSpaceRoot(
                         onRefresh = { viewModel.refreshFeed() },
                         onOpen = { item -> item.link?.let(onOpenLink) },
                         contentPadding = bodyPadding,
+                        header = {
+                            // Recomputed when the feed refreshes rather than
+                            // held: a day of app history is not something to
+                            // keep in memory to redraw one card.
+                            val usage = remember(feedState) { viewModel.screenTimeToday() }
+                            val labels = remember(state.allApps) {
+                                state.allApps.associate { it.packageName to it.label }
+                            }
+                            ScreenTimeCard(
+                                summary = usage,
+                                labelFor = { labels[it] ?: it },
+                                hasAccess = state.hasUsageAccess,
+                                onRequestAccess = onOpenUsageSettings,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                        },
                     )
                 },
                 workContent = {
+                    LaunchedEffect(Unit) { viewModel.refreshMicrosoft() }
                     WorkItemsPage(
                         state = workItems,
                         onOpenApp = onOpenPackage,
                         onRequestNotificationAccess = onOpenNotificationSettings,
                         contentPadding = bodyPadding,
+                        microsoft = microsoftState,
+                        onMicrosoftSignIn = viewModel::beginMicrosoftSignIn,
+                        onMicrosoftSignOut = viewModel::signOutMicrosoft,
+                        onConfigureMicrosoft = { viewModel.setSettingsOpen(true) },
                     )
                 },
                 libraryContent = {
@@ -324,6 +402,28 @@ fun FoldSpaceRoot(
 
         longPressItem?.let { item ->
             val pinnedKeys = state.settings.pinnedDockApps[state.space.key].orEmpty()
+            val appKey = item.app?.key
+            val currentOverride = appKey?.let { state.settings.iconOverrides[it] }
+            val resolver = LocalContext.current.contentResolver
+
+            // ACTION_OPEN_DOCUMENT rather than a media picker: the grant has to
+            // outlive this launch, and only OpenDocument yields a URI that
+            // takePersistableUriPermission can hold on to. The same route the
+            // layout backup already uses.
+            val pickIcon = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocument(),
+            ) { uri ->
+                viewModel.dismissLongPress()
+                if (uri == null || appKey == null) return@rememberLauncherForActivityResult
+                runCatching {
+                    resolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    )
+                }
+                viewModel.setIconOverride(appKey, currentOverride?.label, uri.toString())
+            }
+
             ItemActionSheet(
                 item = item,
                 shortcuts = remember(item.id) { viewModel.shortcutsFor(item) },
@@ -343,6 +443,21 @@ fun FoldSpaceRoot(
                     viewModel.removeItem(item)
                 },
                 onDismiss = viewModel::dismissLongPress,
+                onRename = { name ->
+                    viewModel.dismissLongPress()
+                    appKey?.let { viewModel.setIconOverride(it, name, currentOverride?.iconUri) }
+                },
+                onPickIcon = { pickIcon.launch(arrayOf("image/*")) },
+                onClearIcon = {
+                    viewModel.dismissLongPress()
+                    appKey?.let { viewModel.setIconOverride(it, currentOverride?.label, null) }
+                },
+                hasCustomIcon = currentOverride?.iconUri != null,
+                isLocked = appKey in state.settings.lockedApps,
+                onToggleLock = {
+                    viewModel.dismissLongPress()
+                    appKey?.let { viewModel.setAppLocked(it, it !in state.settings.lockedApps) }
+                },
                 contentPadding = systemPadding,
             )
         }
@@ -460,6 +575,7 @@ fun FoldSpaceRoot(
                 onSetBadgeStyle = viewModel::setBadgeStyle,
                 onSetDockShape = viewModel::setDockShape,
                 onSetDesktopModeOnUnfold = viewModel::setDesktopModeOnUnfold,
+                onSetMicrosoftClientId = viewModel::setMicrosoftClientId,
                 onPickIconPack = { viewModel.openSheet(LauncherViewModel.Sheet.IconPack) },
                 onExportLayout = {
                     viewModel.setSettingsOpen(false)

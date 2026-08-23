@@ -28,6 +28,10 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import androidx.compose.ui.text.style.TextOverflow
+import com.foldspace.launcher.usage.ScreenTime
+import com.foldspace.launcher.usage.ScreenTimeSummary
+import com.foldspace.launcher.ui.components.TextAction
 
 /**
  * §13.1 Native Cards. Every card is a pure composable over state that already
@@ -164,6 +168,87 @@ fun NotificationDigestCard(summary: NotificationSummary, modifier: Modifier = Mo
                         color = tokens.textPrimary,
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Today's screen time.
+ *
+ * `PACKAGE_USAGE_STATS` has been declared since V0.1 and only ever fed the
+ * dock's recency scores — the numbers a person might want about their own day
+ * were computed and thrown away. This is the one part of Microsoft Launcher's
+ * feed that needs no account behind it.
+ *
+ * Nothing is stored: the platform already keeps this, and a second copy would
+ * be a second thing to leak (§16.1).
+ */
+@Composable
+fun ScreenTimeCard(
+    summary: ScreenTimeSummary,
+    labelFor: (String) -> String,
+    hasAccess: Boolean,
+    onRequestAccess: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = FoldSpaceTheme.tokens
+
+    FoldCard(modifier) {
+        CardTitle("今日使用時間")
+        Spacer(Modifier.height(8.dp))
+
+        if (!hasAccess) {
+            Text(
+                text = "需要「使用情況存取權」才能讀取。這項資料只在畫面上計算，不會被儲存。",
+                style = MaterialTheme.typography.bodySmall,
+                color = tokens.textSecondary,
+            )
+            Spacer(Modifier.height(8.dp))
+            TextAction(text = "前往授權", onClick = onRequestAccess)
+            return@FoldCard
+        }
+
+        if (summary.isEmpty) {
+            Text(
+                text = "今天還沒有記錄",
+                style = MaterialTheme.typography.bodySmall,
+                color = tokens.textMuted,
+            )
+            return@FoldCard
+        }
+
+        Text(
+            text = ScreenTime.formatDuration(summary.totalMillis),
+            style = MaterialTheme.typography.headlineSmall,
+            color = tokens.textPrimary,
+        )
+        Text(
+            text = "解鎖 ${summary.unlocks} 次",
+            style = MaterialTheme.typography.labelSmall,
+            color = tokens.textMuted,
+        )
+
+        if (summary.top.isEmpty()) return@FoldCard
+        Spacer(Modifier.height(10.dp))
+        summary.top.forEach { entry ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = labelFor(entry.packageName),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = ScreenTime.formatDuration(entry.millis),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textMuted,
+                )
             }
         }
     }

@@ -14,6 +14,8 @@ import com.foldspace.launcher.context.AutomationRuleCodec
 import com.foldspace.launcher.context.SwitchMode
 import com.foldspace.launcher.pairs.AppPair
 import com.foldspace.launcher.pairs.AppPairCodec
+import com.foldspace.launcher.ui.icons.IconOverride
+import com.foldspace.launcher.ui.icons.IconOverrideCodec
 import com.foldspace.launcher.spaces.SpaceId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -142,6 +144,23 @@ data class FoldSpaceSettings(
      * just a bigger screen for a video.
      */
     val desktopModeOnUnfold: Boolean = true,
+    /** Renamed apps and hand-picked artwork, by [AppEntry.key]. */
+    val iconOverrides: Map<String, IconOverride> = emptyMap(),
+    /**
+     * Apps that ask for a fingerprint before FoldSpace will open them.
+     *
+     * A speed bump, not security — see [setAppLocked].
+     */
+    val lockedApps: Set<String> = emptySet(),
+    /**
+     * The Azure app registration's client id.
+     *
+     * Null by default and it has to be, because registering the app needs the
+     * user's own Microsoft account and the Azure portal — no code here can do
+     * it for them. Until one is pasted in, the Microsoft section says exactly
+     * what is missing rather than failing in some other way.
+     */
+    val microsoftClientId: String? = null,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "foldspace")
@@ -210,6 +229,13 @@ class SettingsRepository(
         put(BackupKeys.BADGE_STYLE, setOf(current.badgeStyle.key))
         put(BackupKeys.DOCK_SHAPE, setOf("${current.dockShape.rows}x${current.dockShape.columns}"))
         if (current.hiddenApps.isNotEmpty()) put(BackupKeys.HIDDEN, current.hiddenApps)
+        // Names travel; the picture URIs are permissions granted to *this*
+        // install and mean nothing after a restore, so they are dropped and
+        // the restore keeps the rename alone.
+        val names = current.iconOverrides.values
+            .filter { !it.label.isNullOrBlank() }
+            .map { IconOverride(it.appKey, it.label, null) }
+        if (names.isNotEmpty()) put(BackupKeys.OVERRIDES, IconOverrideCodec.encodeAll(names))
         current.pinnedDockApps.forEach { (spaceKey, keys) ->
             if (keys.isNotEmpty()) put(BackupKeys.PINNED_PREFIX + spaceKey, keys.toSet())
         }
@@ -224,6 +250,7 @@ class SettingsRepository(
         values[BackupKeys.ICON_PACK]?.firstOrNull()?.let { prefs[Keys.IconPack] = it }
         values[BackupKeys.BADGE_STYLE]?.firstOrNull()?.let { prefs[Keys.BadgeStyle] = it }
         values[BackupKeys.HIDDEN]?.let { prefs[Keys.HiddenApps] = it }
+        values[BackupKeys.OVERRIDES]?.let { prefs[Keys.IconOverrides] = it }
         values[BackupKeys.DOCK_SHAPE]?.firstOrNull()?.let { raw ->
             val rows = raw.substringBefore('x').toIntOrNull()
             val columns = raw.substringAfter('x').toIntOrNull()
@@ -253,6 +280,7 @@ class SettingsRepository(
         const val BADGE_STYLE = "badgeStyle"
         const val DOCK_SHAPE = "dockShape"
         const val HIDDEN = "hiddenApps"
+        const val OVERRIDES = "iconOverrides"
     }
 
     suspend fun setSamsungWalletCompatibility(enabled: Boolean) =
@@ -279,10 +307,42 @@ class SettingsRepository(
         prefs[Keys.HiddenApps] = if (hidden) current + appKey else current - appKey
     }
 
+    /**
+     * Locks or unlocks one app.
+     *
+     * What this can do is refuse to launch an app *from FoldSpace* without a
+     * fingerprint. What it cannot do is stop the app being opened from
+     * recents, from a notification, from the Play Store, from a share sheet or
+     * from another launcher — a home screen has no authority over any of
+     * those. So this is a speed bump against someone picking up an unlocked
+     * phone, and the UI says exactly that rather than the word "security".
+     */
+    suspend fun setAppLocked(appKey: String, locked: Boolean) = edit { prefs ->
+        val current = prefs[Keys.LockedApps].orEmpty()
+        prefs[Keys.LockedApps] = if (locked) current + appKey else current - appKey
+    }
+
+    suspend fun setMicrosoftClientId(clientId: String?) = edit { prefs ->
+        val trimmed = clientId?.trim()
+        if (trimmed.isNullOrBlank()) prefs.remove(Keys.MicrosoftClientId)
+        else prefs[Keys.MicrosoftClientId] = trimmed
+    }
+
     suspend fun setBadgeStyle(style: BadgeStyle) = edit { it[Keys.BadgeStyle] = style.key }
 
     suspend fun setDesktopModeOnUnfold(enabled: Boolean) =
         edit { it[Keys.DesktopOnUnfold] = enabled }
+
+    /**
+     * Sets or clears one app's override. An override with neither a name nor a
+     * picture is removed rather than stored as an empty row.
+     */
+    suspend fun setIconOverride(override: IconOverride) = edit { prefs ->
+        val current = IconOverrideCodec.decodeAll(prefs[Keys.IconOverrides].orEmpty())
+        val next = if (override.isEmpty) current - override.appKey
+        else current + (override.appKey to override)
+        prefs[Keys.IconOverrides] = IconOverrideCodec.encodeAll(next.values)
+    }
 
     suspend fun setDockShape(shape: DockShape) = edit { prefs ->
         prefs[Keys.DockRows] = shape.rows.coerceIn(DockShape.MIN_ROWS, DockShape.MAX_ROWS)
@@ -330,6 +390,9 @@ class SettingsRepository(
         hiddenApps = prefs[Keys.HiddenApps].orEmpty(),
         badgeStyle = BadgeStyle.fromKey(prefs[Keys.BadgeStyle]),
         desktopModeOnUnfold = prefs[Keys.DesktopOnUnfold] ?: true,
+        iconOverrides = IconOverrideCodec.decodeAll(prefs[Keys.IconOverrides].orEmpty()),
+        lockedApps = prefs[Keys.LockedApps].orEmpty(),
+        microsoftClientId = prefs[Keys.MicrosoftClientId]?.takeIf { it.isNotBlank() },
         // Clamped on the way out as well as in: a value written by an older
         // build, or by a restored backup, must not produce a dock with zero
         // rows and no way back to the settings screen.
@@ -358,6 +421,9 @@ class SettingsRepository(
         val HiddenApps = stringSetPreferencesKey("hidden_apps")
         val BadgeStyle = stringPreferencesKey("badge_style")
         val DesktopOnUnfold = booleanPreferencesKey("desktop_mode_on_unfold")
+        val IconOverrides = stringSetPreferencesKey("icon_overrides")
+        val LockedApps = stringSetPreferencesKey("locked_apps")
+        val MicrosoftClientId = stringPreferencesKey("microsoft_client_id")
         val DockRows = intPreferencesKey("dock_rows")
         val DockColumns = intPreferencesKey("dock_columns")
 

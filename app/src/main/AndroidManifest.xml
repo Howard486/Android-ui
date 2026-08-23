@@ -106,6 +106,26 @@
         </activity>
 
         <!--
+          The return leg of a Microsoft sign-in. A custom scheme, because
+          MSAL's redirect URI is derived from the signing certificate and this
+          project's release build is signed with a keystore CI regenerates on
+          every run.
+        -->
+        <activity
+            android:name=".AuthRedirectActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="foldspace" android:host="auth" />
+            </intent-filter>
+        </activity>
+
+        <!--
           §10 Notification Intelligence. The user must grant Notification
           Listener Access in system settings; until then the service is simply
           never bound and the UI degrades to "no notification data" (§21.1).

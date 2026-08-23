@@ -27,6 +27,14 @@ import com.foldspace.launcher.home.HomeItem
 import com.foldspace.launcher.home.HomeItemType
 import com.foldspace.launcher.ui.components.AppIcon
 import com.foldspace.launcher.ui.components.FoldCard
+import com.foldspace.launcher.ui.components.TextAction
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.draw.clip
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.shape.RoundedCornerShape
 import com.foldspace.launcher.ui.icons.IconShaper
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 
@@ -53,10 +61,18 @@ fun ItemActionSheet(
     onTogglePin: () -> Unit,
     onRemove: () -> Unit,
     onDismiss: () -> Unit,
+    onRename: (String?) -> Unit,
+    onPickIcon: () -> Unit,
+    onClearIcon: () -> Unit,
+    hasCustomIcon: Boolean,
+    isLocked: Boolean,
+    onToggleLock: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
     val tokens = FoldSpaceTheme.tokens
+    var renaming by remember(item.id) { mutableStateOf(false) }
+    var draft by remember(item.id) { mutableStateOf(item.label.ifBlank { item.app?.label.orEmpty() }) }
 
     Box(
         modifier
@@ -106,26 +122,89 @@ fun ItemActionSheet(
 
             Spacer(Modifier.height(14.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                if (item.type != HomeItemType.Folder) {
-                    Text(
-                        text = if (isPinned) "取消釘選" else "釘選到 Dock",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = tokens.accent,
-                        modifier = Modifier.clickable(onClick = onTogglePin).padding(4.dp),
+            if (renaming) {
+                RenameField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextAction(
+                        text = "儲存",
+                        onClick = {
+                            onRename(draft.trim().takeIf { it.isNotBlank() })
+                            renaming = false
+                        },
                     )
-                    Text(
-                        text = "App 資訊",
-                        style = MaterialTheme.typography.labelSmall,
+                    // Clearing restores the app's real name rather than storing
+                    // an empty one, so the app is still findable by it.
+                    TextAction(
+                        text = "還原原名",
+                        onClick = {
+                            onRename(null)
+                            renaming = false
+                        },
+                        color = tokens.textMuted,
+                    )
+                    TextAction(
+                        text = "取消",
+                        onClick = { renaming = false },
                         color = tokens.textSecondary,
-                        modifier = Modifier.clickable(onClick = onOpenAppInfo).padding(4.dp),
                     )
                 }
-                Text(
+                return@FoldCard
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (item.type != HomeItemType.Folder) {
+                    TextAction(
+                        text = if (isPinned) "取消釘選" else "釘選到 Dock",
+                        onClick = onTogglePin,
+                    )
+                    TextAction(
+                        text = "App 資訊",
+                        onClick = onOpenAppInfo,
+                        color = tokens.textSecondary,
+                    )
+                }
+                TextAction(
                     text = "從桌面移除",
+                    onClick = onRemove,
+                    color = tokens.textMuted,
+                )
+            }
+
+            if (item.type != HomeItemType.Folder && item.app != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextAction(text = "重新命名", onClick = { renaming = true })
+                    TextAction(
+                        text = if (hasCustomIcon) "更換圖示" else "自訂圖示",
+                        onClick = onPickIcon,
+                    )
+                    if (hasCustomIcon) {
+                        TextAction(
+                            text = "還原圖示",
+                            onClick = onClearIcon,
+                            color = tokens.textMuted,
+                        )
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextAction(
+                        text = if (isLocked) "取消 App 鎖" else "加上 App 鎖",
+                        onClick = onToggleLock,
+                        color = if (isLocked) tokens.textMuted else tokens.accent,
+                    )
+                }
+                // Said here rather than in a settings page nobody opens: this
+                // only stops the app being launched *from FoldSpace*. Recents,
+                // notifications and any other launcher walk straight past it.
+                Text(
+                    text = "App 鎖只擋從 FoldSpace 開啟。從最近使用、通知或其他 Launcher 仍然打得開 —— " +
+                        "這是防止別人隨手拿起手機，不是安全機制。",
                     style = MaterialTheme.typography.labelSmall,
                     color = tokens.textMuted,
-                    modifier = Modifier.clickable(onClick = onRemove).padding(4.dp),
                 )
             }
         }
@@ -170,3 +249,31 @@ private fun ShortcutRow(shortcut: AppShortcut, onClick: () -> Unit) {
 
 /** Rendered once and cached; the sheet is small and short-lived. */
 private const val SHORTCUT_ICON_PX = 96
+
+/**
+ * The rename field.
+ *
+ * A plain field rather than a dialog: the sheet is already a modal surface,
+ * and stacking a second one over it to type six characters is the kind of
+ * ceremony that makes renaming feel like a settings task rather than an edit.
+ */
+@Composable
+private fun RenameField(value: String, onValueChange: (String) -> Unit) {
+    val tokens = FoldSpaceTheme.tokens
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(tokens.cardRadius))
+            .background(tokens.surfaceElevated)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = tokens.textPrimary),
+            cursorBrush = SolidColor(tokens.accent),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}

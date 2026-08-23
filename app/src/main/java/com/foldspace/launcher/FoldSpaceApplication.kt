@@ -7,7 +7,10 @@ import com.foldspace.launcher.ai.PromptNanoAdapter
 import com.foldspace.launcher.ai.TextInference
 import com.foldspace.launcher.context.ContextEngine
 import com.foldspace.launcher.desktop.DesktopLauncher
+import com.foldspace.launcher.microsoft.MicrosoftRepository
+import com.foldspace.launcher.microsoft.TokenStore
 import com.foldspace.launcher.quick.QuickController
+import com.foldspace.launcher.usage.ScreenTimeSource
 import com.foldspace.launcher.context.RuleEngine
 import com.foldspace.launcher.core.launcher.HomeRoleManager
 import com.foldspace.launcher.core.launcher.LauncherAppsRepository
@@ -116,6 +119,12 @@ class AppContainer(context: Context) {
 
     /** §4 — two apps side by side, as far as the platform permits. */
     val splitLauncher = SplitLauncher(context, launcherApps)
+
+    /** Calendar and tasks from Microsoft Graph. No model, no cache, no notes. */
+    val microsoft = MicrosoftRepository(context, TokenStore(context))
+
+    /** Today's screen time, read on demand and never stored. */
+    val screenTime = ScreenTimeSource(context)
 
     /** Torch, volume and brightness — and honesty about the rest. */
     val quickControls = QuickController(context)

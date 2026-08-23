@@ -27,6 +27,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -40,6 +41,8 @@ import com.foldspace.launcher.ui.icons.IconShaper
 import com.foldspace.launcher.settings.BadgeStyle
 import com.foldspace.launcher.ui.icons.LocalDayOfMonth
 import com.foldspace.launcher.ui.icons.LocalIconPack
+import com.foldspace.launcher.ui.icons.loadOverrideArtwork
+import com.foldspace.launcher.ui.icons.LocalIconOverrides
 import com.foldspace.launcher.ui.icons.Squircle
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 
@@ -186,16 +189,27 @@ fun AppIcon(entry: AppEntry, size: Dp) {
     val day = LocalDayOfMonth.current
     val dayKey = if (dynamic) day else 0
 
-    val bitmap = remember(entry.key, pxSize, tokens.surfaceElevated, pack, dayKey) {
-        val packed = pack?.iconFor(component, day)
+    // A picture the user chose wins over the pack, which wins over the app's
+    // own icon. Nothing here decides *shape* — all three go through the same
+    // squircle, which is why a mixed set still lands as one uniform grid.
+    val context = LocalContext.current
+    val overrideUri = LocalIconOverrides.current[entry.key]
+
+    val bitmap = remember(entry.key, pxSize, tokens.surfaceElevated, pack, dayKey, overrideUri) {
+        val custom = overrideUri?.let { loadOverrideArtwork(context, it, pxSize) }
+        val packed = if (custom == null) pack?.iconFor(component, day) else null
         IconShaper.render(
-            drawable = packed ?: entry.icon,
+            drawable = custom ?: packed ?: entry.icon,
             sizePx = pxSize,
             // The pack is part of the key, or switching packs would keep
-            // serving the previous one's art out of the cache.
-            key = entry.key + "@" + (pack?.packageName ?: "system") +
+            // serving the previous one's art out of the cache. So is the
+            // override, or clearing one would keep serving the old picture.
+            key = entry.key + "@" + (overrideUri ?: pack?.packageName ?: "system") +
                 if (dynamic) "@d" + day else "",
             tile = tokens.surfaceElevated,
+            // A photograph fills the squircle; an app's own legacy icon is
+            // inset onto a tile because it carries its own silhouette.
+            fill = custom != null,
         )
     }
 
