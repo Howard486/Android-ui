@@ -23,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -32,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.MaterialTheme
 import com.foldspace.launcher.core.launcher.AppEntry
+import com.foldspace.launcher.ui.icons.IconShaper
+import com.foldspace.launcher.ui.icons.Squircle
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 
 /** The standard FoldSpace surface: translucent card over the wallpaper. */
@@ -130,20 +131,21 @@ fun AppTile(
 @Composable
 fun AppIcon(entry: AppEntry, size: Dp) {
     val density = LocalDensity.current
+    val tokens = FoldSpaceTheme.tokens
     val pxSize = with(density) { size.roundToPx() }.coerceAtLeast(1)
 
-    val bitmap = remember(entry.key, pxSize) {
-        entry.icon?.let { drawable ->
-            val bmp = android.graphics.Bitmap.createBitmap(
-                pxSize,
-                pxSize,
-                android.graphics.Bitmap.Config.ARGB_8888,
-            )
-            val canvas = android.graphics.Canvas(bmp)
-            drawable.setBounds(0, 0, pxSize, pxSize)
-            drawable.draw(canvas)
-            bmp.asImageBitmap()
-        }
+    // Every icon comes back as the same squircle at the same size. Drawing
+    // the platform drawable straight into a square, which is what this did
+    // before, let adaptive icons show their full background bleed and let
+    // legacy icons keep whatever silhouette their author chose — the reason
+    // a full page of them never lined up.
+    val bitmap = remember(entry.key, pxSize, tokens.surfaceElevated) {
+        IconShaper.render(
+            drawable = entry.icon,
+            sizePx = pxSize,
+            key = entry.key,
+            tile = tokens.surfaceElevated,
+        )
     }
 
     if (bitmap != null) {
@@ -154,11 +156,10 @@ fun AppIcon(entry: AppEntry, size: Dp) {
         )
     } else {
         // Missing icon: a labelled placeholder beats an empty gap.
-        val tokens = FoldSpaceTheme.tokens
         Box(
             Modifier
                 .size(size)
-                .clip(RoundedCornerShape(tokens.iconCornerRadius))
+                .clip(Squircle.Shape)
                 .background(tokens.surfaceElevated),
             contentAlignment = Alignment.Center,
         ) {

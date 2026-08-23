@@ -1,6 +1,7 @@
 package com.foldspace.launcher.home
 
 import com.foldspace.launcher.core.launcher.AppEntry
+import com.foldspace.launcher.settings.GridChoice
 import com.foldspace.launcher.spaces.SpaceId
 
 /**
@@ -23,6 +24,31 @@ enum class Posture(val key: String) {
     }
 }
 
+/**
+ * Which stored arrangement a layout belongs to.
+ *
+ * Not the Space. 通用 and 工作 share one arrangement and differ only in which
+ * pages they show — the iOS Focus model, adopted because the alternative (one
+ * arrangement per Space, which this replaced) meant an app placed in 通用
+ * simply did not exist in 工作, and three separate desktops to keep in step.
+ *
+ * 簡易 keeps its own surface because it is not a view of the desktop; it is a
+ * different screen with four apps and a clock.
+ */
+enum class HomeSurface(val key: String) {
+    Desktop("desktop"),
+    Simple("simple"),
+    ;
+
+    companion object {
+        fun of(space: SpaceId): HomeSurface =
+            if (space == SpaceId.Simple) Simple else Desktop
+
+        fun fromKey(key: String?): HomeSurface =
+            entries.firstOrNull { it.key == key } ?: Desktop
+    }
+}
+
 /** Columns × rows of one page. */
 data class GridSpec(val columns: Int, val rows: Int) {
     val cellsPerPage: Int get() = columns * rows
@@ -30,26 +56,26 @@ data class GridSpec(val columns: Int, val rows: Int) {
     fun contains(x: Int, y: Int): Boolean = x in 0 until columns && y in 0 until rows
 
     companion object {
-        /**
-         * §4.1 / the 5×7 request. On a Fold cover screen (~387dp wide) five
-         * columns is ~77dp per cell, which is what a normal launcher uses.
-         */
-        val Folded = GridSpec(columns = 5, rows = 7)
-
-        /**
-         * The inner screen is ~940dp wide; five columns there would be 188dp
-         * per cell, which is absurd. Eight columns keeps the cell size close
-         * to the folded one.
-         */
-        val Unfolded = GridSpec(columns = 8, rows = 6)
-
         /** 簡易: a big clock and four apps, nothing else. */
         val Simple = GridSpec(columns = 2, rows = 2)
 
-        fun of(space: SpaceId, posture: Posture): GridSpec = when {
-            space == SpaceId.Simple -> Simple
-            posture == Posture.Unfolded -> Unfolded
-            else -> Folded
+        /**
+         * The grid in force.
+         *
+         * [choice] is the user's setting — 4×6 by default, which on a Fold
+         * cover screen (~387dp) is ~96dp a cell, the spacing an iPhone uses.
+         * 簡易 ignores it: four apps and a clock is the mode, not a density.
+         */
+        fun of(
+            surface: HomeSurface,
+            posture: Posture,
+            choice: GridChoice = GridChoice.Ios,
+        ): GridSpec = when {
+            surface == HomeSurface.Simple -> Simple
+            posture == Posture.Unfolded ->
+                GridSpec(choice.unfoldedColumns, choice.unfoldedRows)
+
+            else -> GridSpec(choice.foldedColumns, choice.foldedRows)
         }
     }
 }
@@ -74,6 +100,16 @@ enum class PageKind(val key: String) {
 
     /** 工作 mode's notification-derived work items. */
     Work("work"),
+
+    /**
+     * The App Library: every installed app grouped by category.
+     *
+     * A *view*, never a rearrangement. One-tap organise used to move the
+     * user's real icons into folders, which is why it needed an undo and why
+     * it was alarming when it ran. Reading the same categorisation onto its
+     * own page costs the arrangement nothing.
+     */
+    Library("library"),
     ;
 
     val isGrid: Boolean get() = this == Grid
@@ -142,9 +178,17 @@ data class HomePage(
     val index: Int,
     val items: List<HomeItem>,
     val kind: PageKind = PageKind.Grid,
+    /**
+     * Which contexts show this page. Empty means all of them, which is what
+     * an ordinary page is: switching 情境 hides and reveals pages, it never
+     * moves what is on them.
+     */
+    val contexts: Set<SpaceId> = emptySet(),
 ) {
     /** Whatever holds this cell, whether or not the cell is its anchor. */
     fun occupantAt(x: Int, y: Int): HomeItem? = items.firstOrNull { it.covers(x, y) }
+
+    fun visibleIn(space: SpaceId): Boolean = contexts.isEmpty() || space in contexts
 }
 
 /** The whole arrangement for one Space in one posture. */
@@ -249,11 +293,14 @@ data class HomeLayout(
         return Triple(nextPage, 0, 0)
     }
 
+    /** The trailing App Library page, which every context gets. */
+    val trailing: PageKind get() = PageKind.Library
+
     companion object {
         fun empty(space: SpaceId, posture: Posture) = HomeLayout(
             space = space,
             posture = posture,
-            grid = GridSpec.of(space, posture),
+            grid = GridSpec.of(HomeSurface.of(space), posture),
             pages = emptyList(),
             leading = leadingFor(space),
         )
@@ -263,6 +310,86 @@ data class HomeLayout(
             SpaceId.General -> PageKind.Feed
             SpaceId.Work -> PageKind.Work
             SpaceId.Simple -> null
+        }
+    }
+}
+
+/** A cell assignment: which page, and where on it. */
+data class CellSlot(val pageIndex: Int, val cellX: Int, val cellY: Int)
+
+/**
+ * Assigns cells to a list of spans, in the order given.
+ *
+ * Needed because the grid is now the user's choice: changing 4×6 to 5×7 leaves
+ * every stored cell meaningless, and items outside the new bounds would simply
+ * stop being drawn. Packing in reading order is the only reflow that keeps the
+ * arrangement recognisable — the first icon stays first.
+ *
+ * Idempotent: run against the grid the items are already packed for, every
+ * item lands back where it was. That is what lets the caller run it whenever
+ * the setting is read rather than having to track whether it changed.
+ */
+object GridPacker {
+
+    fun pack(spans: List<Pair<Int, Int>>, grid: GridSpec): List<CellSlot> {
+        val taken = mutableSetOf<Triple<Int, Int, Int>>()
+        val slots = mutableListOf<CellSlot>()
+
+        for ((rawSpanX, rawSpanY) in spans) {
+            val spanX = rawSpanX.coerceIn(1, grid.columns.coerceAtLeast(1))
+            val spanY = rawSpanY.coerceIn(1, grid.rows.coerceAtLeast(1))
+            slots += firstFit(taken, grid, spanX, spanY)
+        }
+        return slots
+    }
+
+    private fun firstFit(
+        taken: MutableSet<Triple<Int, Int, Int>>,
+        grid: GridSpec,
+        spanX: Int,
+        spanY: Int,
+    ): CellSlot {
+        var page = 0
+        while (true) {
+            for (y in 0..grid.rows - spanY) {
+                for (x in 0..grid.columns - spanX) {
+                    if (!fits(taken, page, x, y, spanX, spanY)) continue
+                    occupy(taken, page, x, y, spanX, spanY)
+                    return CellSlot(page, x, y)
+                }
+            }
+            page++
+        }
+    }
+
+    private fun fits(
+        taken: Set<Triple<Int, Int, Int>>,
+        page: Int,
+        cellX: Int,
+        cellY: Int,
+        spanX: Int,
+        spanY: Int,
+    ): Boolean {
+        for (y in cellY until cellY + spanY) {
+            for (x in cellX until cellX + spanX) {
+                if (Triple(page, x, y) in taken) return false
+            }
+        }
+        return true
+    }
+
+    private fun occupy(
+        taken: MutableSet<Triple<Int, Int, Int>>,
+        page: Int,
+        cellX: Int,
+        cellY: Int,
+        spanX: Int,
+        spanY: Int,
+    ) {
+        for (y in cellY until cellY + spanY) {
+            for (x in cellX until cellX + spanX) {
+                taken += Triple(page, x, y)
+            }
         }
     }
 }

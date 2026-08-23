@@ -6,16 +6,18 @@ import com.foldspace.launcher.home.db.HomeItemDao
 import com.foldspace.launcher.home.db.HomeItemEntity
 import com.foldspace.launcher.home.db.HomePageDao
 import com.foldspace.launcher.home.db.HomePageEntity
+import com.foldspace.launcher.settings.GridChoice
 import com.foldspace.launcher.spaces.SpaceId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
 
 /**
  * The home-screen arrangement.
  *
- * Everything here is keyed by (Space, Posture): the two postures hold separate
- * arrangements by design (see [Posture]), and each Space has its own.
+ * Keyed by ([HomeSurface], [Posture]) rather than by Space. 通用 and 工作 share
+ * one arrangement and differ only in which pages they show; the previous
+ * per-Space keying meant three separate desktops to keep in step, and an app
+ * placed in one context simply did not exist in the others.
  */
 class HomeLayoutRepository(
     private val dao: HomeItemDao,
@@ -36,14 +38,16 @@ class HomeLayoutRepository(
     /**
      * The layout as the UI consumes it: rows joined against the live installed
      * list, so an app that vanished shows as unavailable rather than as a
-     * dangling row.
+     * dangling row, and pages filtered to the ones this context shows.
      */
-    fun observe(space: SpaceId, posture: Posture): Flow<HomeLayout> =
-        combine(
-            dao.observeLayout(space.key, posture.key),
-            pageDao.observePages(space.key, posture.key),
+    fun observe(space: SpaceId, posture: Posture, choice: GridChoice): Flow<HomeLayout> {
+        val surface = HomeSurface.of(space)
+        return combine(
+            dao.observeLayout(surface.key, posture.key),
+            pageDao.observePages(surface.key, posture.key),
             installedApps,
-        ) { rows, pages, apps -> resolve(space, posture, rows, pages, apps) }
+        ) { rows, pages, apps -> resolve(space, surface, posture, choice, rows, pages, apps) }
+    }
 
     /**
      * §5.2 — with no app drawer, every installed app has to be reachable from
@@ -51,18 +55,25 @@ class HomeLayoutRepository(
      * because any "smart" first-run order is a guess the user then has to
      * undo.
      */
-    suspend fun seedIfEmpty(space: SpaceId, posture: Posture, apps: List<AppEntry>) {
-        if (dao.countIn(space.key, posture.key) > 0) return
+    suspend fun seedIfEmpty(
+        surface: HomeSurface,
+        posture: Posture,
+        apps: List<AppEntry>,
+        choice: GridChoice,
+    ) {
+        if (dao.countIn(surface.key, posture.key) > 0) return
         if (apps.isEmpty()) return
 
-        val grid = GridSpec.of(space, posture)
+        val grid = GridSpec.of(surface, posture, choice)
         val placeable = apps
             // Private Space apps are never auto-placed: §14.2 requires they
             // stay in their own container and not leak onto the home screen.
             .filter { it.profile != ProfileType.Private }
-            .let { if (space == SpaceId.Simple) it.take(grid.cellsPerPage) else it }
+            .let { if (surface == HomeSurface.Simple) it.take(grid.cellsPerPage) else it }
 
-        dao.insertAll(placeable.mapIndexed { index, app -> app.toEntity(space, posture, grid, index) })
+        dao.insertAll(
+            placeable.mapIndexed { index, app -> app.toEntity(surface, posture, grid, index) },
+        )
     }
 
     /**
@@ -70,25 +81,77 @@ class HomeLayoutRepository(
      * device is opened, so unfolding does not present an empty desktop. After
      * this they diverge and are never re-synced.
      */
-    suspend fun seedPostureFrom(space: SpaceId, source: Posture, target: Posture) {
-        if (dao.countIn(space.key, target.key) > 0) return
+    suspend fun seedPostureFrom(
+        surface: HomeSurface,
+        source: Posture,
+        target: Posture,
+        choice: GridChoice,
+    ) {
+        if (dao.countIn(surface.key, target.key) > 0) return
 
-        val sourceRows = dao.getLayout(space.key, source.key)
+        val sourceRows = dao.getLayout(surface.key, source.key)
             .filter { it.container == HomeItemEntity.CONTAINER_DESKTOP && it.itemType == "app" }
         if (sourceRows.isEmpty()) return
 
-        val grid = GridSpec.of(space, target)
-        // Reflowed in the source's reading order rather than copied cell for
-        // cell: the grids are different shapes, so a copy would drop anything
-        // outside the narrower one.
+        val grid = GridSpec.of(surface, target, choice)
+        val slots = GridPacker.pack(sourceRows.map { it.spanX to it.spanY }, grid)
         dao.insertAll(
             sourceRows.mapIndexed { index, row ->
+                val slot = slots[index]
                 row.copy(
                     id = 0,
                     postureKey = target.key,
-                    pageIndex = index / grid.cellsPerPage,
-                    cellX = (index % grid.cellsPerPage) % grid.columns,
-                    cellY = (index % grid.cellsPerPage) / grid.columns,
+                    pageIndex = slot.pageIndex,
+                    cellX = slot.cellX,
+                    cellY = slot.cellY,
+                )
+            },
+        )
+    }
+
+    /**
+     * Repacks a surface into the given grid.
+     *
+     * The grid is the user's setting now, so 4×6 becoming 5×7 leaves every
+     * stored cell meaningless. [GridPacker] is idempotent, so this is safe to
+     * run whenever the setting is read rather than only when it changes.
+     */
+    suspend fun reflow(surface: HomeSurface, posture: Posture, choice: GridChoice) {
+        val grid = GridSpec.of(surface, posture, choice)
+        val desktop = dao.getLayout(surface.key, posture.key)
+            .filter { it.container == HomeItemEntity.CONTAINER_DESKTOP }
+            .sortedWith(compareBy({ it.pageIndex }, { it.cellY }, { it.cellX }))
+        if (desktop.isEmpty()) return
+
+        val slots = GridPacker.pack(
+            desktop.map {
+                it.spanX.coerceAtMost(grid.columns) to it.spanY.coerceAtMost(grid.rows)
+            },
+            grid,
+        )
+
+        // Nothing to do is the common case — against the grid the items are
+        // already packed for, the packer returns exactly where they are — and
+        // writing anyway would churn the observing flow on every settings read.
+        val unchanged = desktop.withIndex().all { (index, row) ->
+            val slot = slots[index]
+            row.pageIndex == slot.pageIndex && row.cellX == slot.cellX &&
+                row.cellY == slot.cellY &&
+                row.spanX <= grid.columns && row.spanY <= grid.rows
+        }
+        if (unchanged) return
+
+        // Folder members are left alone: they hold no cell, and rewriting them
+        // is how their container gets lost.
+        dao.repackDesktop(
+            desktop.mapIndexed { index, row ->
+                val slot = slots[index]
+                row.copy(
+                    pageIndex = slot.pageIndex,
+                    cellX = slot.cellX,
+                    cellY = slot.cellY,
+                    spanX = row.spanX.coerceAtMost(grid.columns),
+                    spanY = row.spanY.coerceAtMost(grid.rows),
                 )
             },
         )
@@ -98,7 +161,7 @@ class HomeLayoutRepository(
      * Keeps the layout in step with what is installed. Newly installed apps
      * land in the first free cell; uninstalled ones are removed everywhere.
      */
-    suspend fun syncInstalled(apps: List<AppEntry>) {
+    suspend fun syncInstalled(apps: List<AppEntry>, choice: GridChoice) {
         val installedPackages = apps.mapTo(mutableSetOf()) { it.packageName }
         val placed = dao.placedPackages().toSet()
 
@@ -109,40 +172,37 @@ class HomeLayoutRepository(
         }
         if (newPackages.isEmpty()) return
 
-        // Only Spaces that already have a layout get new apps appended; a
-        // Space the user has never opened is seeded wholesale instead.
-        for (space in SpaceId.entries) {
-            if (space == SpaceId.Simple) continue
-            for (posture in Posture.entries) {
-                val existing = dao.getLayout(space.key, posture.key)
-                if (existing.isEmpty()) continue
-                val grid = GridSpec.of(space, posture)
-                var slot = nextFreeSlot(existing, grid)
-                for (app in newPackages) {
-                    dao.insert(app.toEntity(space, posture, grid, slot))
-                    slot++
-                }
+        // 簡易 is a fixed four apps the user picks; a new install has no
+        // business appearing there.
+        for (posture in Posture.entries) {
+            val existing = dao.getLayout(HomeSurface.Desktop.key, posture.key)
+            if (existing.isEmpty()) continue
+            val grid = GridSpec.of(HomeSurface.Desktop, posture, choice)
+            var slot = nextFreeSlot(existing, grid)
+            for (app in newPackages) {
+                dao.insert(app.toEntity(HomeSurface.Desktop, posture, grid, slot))
+                slot++
             }
         }
     }
 
     suspend fun setSimpleApps(apps: List<AppEntry>) {
-        val grid = GridSpec.of(SpaceId.Simple, Posture.Folded)
+        val grid = GridSpec.Simple
         val entities = apps.take(grid.cellsPerPage).mapIndexed { index, app ->
-            app.toEntity(SpaceId.Simple, Posture.Folded, grid, index)
+            app.toEntity(HomeSurface.Simple, Posture.Folded, grid, index)
         }
         // Both postures share the arrangement here: four apps and a clock look
         // the same either way, so keeping two copies would only be two things
         // to get out of step.
-        dao.replaceLayout(SpaceId.Simple.key, Posture.Folded.key, entities)
+        dao.replaceLayout(HomeSurface.Simple.key, Posture.Folded.key, entities)
         dao.replaceLayout(
-            SpaceId.Simple.key,
+            HomeSurface.Simple.key,
             Posture.Unfolded.key,
             entities.map { it.copy(id = 0, postureKey = Posture.Unfolded.key) },
         )
     }
 
-    // ---- Editing (phase 3) ----
+    // ---- Editing ----
 
     suspend fun moveItem(itemId: Long, pageIndex: Int, cellX: Int, cellY: Int) =
         dao.moveToCell(itemId, pageIndex, cellX, cellY)
@@ -169,8 +229,9 @@ class HomeLayoutRepository(
 
     /** §13 — records a bound widget at a cell. */
     suspend fun addWidget(
-        space: SpaceId,
+        surface: HomeSurface,
         posture: Posture,
+        choice: GridChoice,
         pageIndex: Int,
         cellX: Int,
         cellY: Int,
@@ -179,10 +240,10 @@ class HomeLayoutRepository(
         spanX: Int,
         spanY: Int,
     ) {
-        val grid = GridSpec.of(space, posture)
+        val grid = GridSpec.of(surface, posture, choice)
         dao.insert(
             HomeItemEntity(
-                spaceKey = space.key,
+                surfaceKey = surface.key,
                 postureKey = posture.key,
                 pageIndex = pageIndex,
                 cellX = cellX,
@@ -202,45 +263,80 @@ class HomeLayoutRepository(
 
     suspend fun removeItem(itemId: Long) = dao.deleteById(itemId)
 
-    suspend fun addPage(space: SpaceId, posture: Posture, kind: PageKind) {
-        val existing = pageDao.getPages(space.key, posture.key)
-        val items = dao.getLayout(space.key, posture.key)
+    // ---- Pages ----
+
+    suspend fun addPage(
+        surface: HomeSurface,
+        posture: Posture,
+        kind: PageKind,
+        contexts: Set<SpaceId> = emptySet(),
+    ) {
+        val existing = pageDao.getPages(surface.key, posture.key)
+        val items = dao.getLayout(surface.key, posture.key)
         val highest = maxOf(
             existing.maxOfOrNull { it.pageIndex } ?: -1,
             items.filter { it.container == HomeItemEntity.CONTAINER_DESKTOP }
                 .maxOfOrNull { it.pageIndex } ?: -1,
         )
         pageDao.upsert(
-            HomePageEntity(space.key, posture.key, highest + 1, kind.key),
+            HomePageEntity(
+                surfaceKey = surface.key,
+                postureKey = posture.key,
+                pageIndex = highest + 1,
+                kind = kind.key,
+                contexts = encodeContexts(contexts),
+            ),
         )
     }
 
-    suspend fun ensurePage(space: SpaceId, posture: Posture, pageIndex: Int, kind: PageKind) {
-        pageDao.upsert(HomePageEntity(space.key, posture.key, pageIndex, kind.key))
+    /** Which 情境 show a page. Empty means all of them. */
+    suspend fun setPageContexts(
+        surface: HomeSurface,
+        posture: Posture,
+        pageIndex: Int,
+        kind: PageKind,
+        contexts: Set<SpaceId>,
+    ) {
+        pageDao.upsert(
+            HomePageEntity(
+                surfaceKey = surface.key,
+                postureKey = posture.key,
+                pageIndex = pageIndex,
+                kind = kind.key,
+                contexts = encodeContexts(contexts),
+            ),
+        )
     }
 
-    // ---- One-tap organise (phase 3) ----
+    suspend fun removePage(surface: HomeSurface, posture: Posture, pageIndex: Int) =
+        pageDao.delete(surface.key, posture.key, pageIndex)
+
+    // ---- One-tap organise ----
 
     /**
      * Groups every placed app into category folders.
      *
-     * Takes a snapshot first: rearranging someone's entire home screen with no
-     * way back is a hostile thing to do, however good the categories are.
+     * Kept alongside the App Library page, which shows the same categories
+     * without moving anything: some people do want their real desktop
+     * foldered, and that is a different want from wanting somewhere to browse.
+     * Takes a snapshot first — rearranging someone's entire home screen with
+     * no way back is a hostile thing to do, however good the categories are.
      */
     suspend fun organiseIntoFolders(
-        space: SpaceId,
+        surface: HomeSurface,
         posture: Posture,
+        choice: GridChoice,
         categories: Map<String, AppCategory>,
     ): OrganiseOutcome {
-        val before = dao.getLayout(space.key, posture.key)
+        val before = dao.getLayout(surface.key, posture.key)
         val apps = before.filter {
             it.itemType == HomeItemType.App.key && it.packageName != null
         }
         if (apps.isEmpty()) return OrganiseOutcome(0, 0)
 
-        undoSnapshot = LayoutSnapshot(space, posture, before)
+        undoSnapshot = LayoutSnapshot(surface, posture, before)
 
-        val grid = GridSpec.of(space, posture)
+        val grid = GridSpec.of(surface, posture, choice)
         val grouped = apps.groupBy { categories[it.packageName] ?: AppCategory.Other }
             .toList()
             .sortedBy { (category, _) -> category.ordinal }
@@ -284,7 +380,7 @@ class HomeLayoutRepository(
             plan += PlannedSlot.Folder(
                 folder = HomeItemEntity(
                     id = 0,
-                    spaceKey = space.key,
+                    surfaceKey = surface.key,
                     postureKey = posture.key,
                     container = HomeItemEntity.CONTAINER_DESKTOP,
                     pageIndex = page,
@@ -305,7 +401,7 @@ class HomeLayoutRepository(
             )
         }
 
-        writePlan(space, posture, plan)
+        writePlan(surface, posture, plan)
         return OrganiseOutcome(foldersCreated = folderCount, appsPlaced = apps.size)
     }
 
@@ -315,11 +411,11 @@ class HomeLayoutRepository(
      * window in which a member points at an id that does not exist.
      */
     private suspend fun writePlan(
-        space: SpaceId,
+        surface: HomeSurface,
         posture: Posture,
         plan: List<PlannedSlot>,
     ) {
-        dao.clearLayout(space.key, posture.key)
+        dao.clearLayout(surface.key, posture.key)
         for (entry in plan) {
             when (entry) {
                 is PlannedSlot.Loose -> dao.insert(entry.item)
@@ -335,7 +431,7 @@ class HomeLayoutRepository(
     suspend fun undoOrganise(): Boolean {
         val snapshot = undoSnapshot ?: return false
         dao.replaceLayout(
-            snapshot.space.key,
+            snapshot.surface.key,
             snapshot.posture.key,
             snapshot.rows.map { it.copy(id = 0) },
         )
@@ -366,13 +462,22 @@ class HomeLayoutRepository(
         return slot
     }
 
+    private fun encodeContexts(contexts: Set<SpaceId>): String =
+        contexts.joinToString(",") { it.key }
+
+    private fun decodeContexts(raw: String?): Set<SpaceId> =
+        raw.orEmpty()
+            .split(",")
+            .filter { it.isNotBlank() }
+            .mapNotNullTo(mutableSetOf()) { key -> SpaceId.entries.firstOrNull { it.key == key } }
+
     private fun AppEntry.toEntity(
-        space: SpaceId,
+        surface: HomeSurface,
         posture: Posture,
         grid: GridSpec,
         slot: Int,
     ) = HomeItemEntity(
-        spaceKey = space.key,
+        surfaceKey = surface.key,
         postureKey = posture.key,
         pageIndex = slot / grid.cellsPerPage,
         cellX = (slot % grid.cellsPerPage) % grid.columns,
@@ -385,12 +490,14 @@ class HomeLayoutRepository(
 
     private fun resolve(
         space: SpaceId,
+        surface: HomeSurface,
         posture: Posture,
+        choice: GridChoice,
         rows: List<HomeItemEntity>,
         pageRows: List<HomePageEntity>,
         apps: List<AppEntry>,
     ): HomeLayout {
-        val grid = GridSpec.of(space, posture)
+        val grid = GridSpec.of(surface, posture, choice)
         val byComponent = apps.associateBy { it.packageName to it.className }
 
         val desktop = rows.filter { it.container == HomeItemEntity.CONTAINER_DESKTOP }
@@ -425,20 +532,27 @@ class HomeLayoutRepository(
             )
         }
 
-        val kinds = pageRows.associate { it.pageIndex to PageKind.fromKey(it.kind) }
+        val declared = pageRows.associateBy { it.pageIndex }
         val itemsByPage = desktop.groupBy { it.pageIndex }
 
         // A page exists if it holds something or if it was explicitly declared
-        // — a declared-but-empty widget or feed page must not disappear.
-        val indices = (itemsByPage.keys + kinds.keys).sorted()
+        // — a declared-but-empty widget page must not disappear.
+        val indices = (itemsByPage.keys + declared.keys).sorted()
 
-        val pages = indices.map { index ->
-            HomePage(
-                index = index,
-                items = itemsByPage[index].orEmpty().map(::toItem),
-                kind = kinds[index] ?: PageKind.Grid,
-            )
-        }
+        val pages = indices
+            .map { index ->
+                val row = declared[index]
+                HomePage(
+                    index = index,
+                    items = itemsByPage[index].orEmpty().map(::toItem),
+                    kind = PageKind.fromKey(row?.kind),
+                    contexts = decodeContexts(row?.contexts),
+                )
+            }
+            // The Focus model: switching 情境 hides and reveals pages, it never
+            // moves what is on them. Page indices stay as stored, so a hidden
+            // page's cells are still its own when it comes back.
+            .filter { it.visibleIn(space) }
 
         return HomeLayout(
             space = space,
@@ -456,7 +570,7 @@ data class OrganiseOutcome(val foldersCreated: Int, val appsPlaced: Int)
 
 /** A single-level undo point for [HomeLayoutRepository.organiseIntoFolders]. */
 private data class LayoutSnapshot(
-    val space: SpaceId,
+    val surface: HomeSurface,
     val posture: Posture,
     val rows: List<HomeItemEntity>,
 )

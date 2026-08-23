@@ -12,20 +12,20 @@ abstract class HomePageDao {
     @Query(
         """
         SELECT * FROM home_pages
-        WHERE spaceKey = :spaceKey AND postureKey = :postureKey
+        WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey
         ORDER BY pageIndex
         """,
     )
-    abstract fun observePages(spaceKey: String, postureKey: String): Flow<List<HomePageEntity>>
+    abstract fun observePages(surfaceKey: String, postureKey: String): Flow<List<HomePageEntity>>
 
     @Query(
         """
         SELECT * FROM home_pages
-        WHERE spaceKey = :spaceKey AND postureKey = :postureKey
+        WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey
         ORDER BY pageIndex
         """,
     )
-    abstract suspend fun getPages(spaceKey: String, postureKey: String): List<HomePageEntity>
+    abstract suspend fun getPages(surfaceKey: String, postureKey: String): List<HomePageEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun upsert(page: HomePageEntity)
@@ -33,11 +33,11 @@ abstract class HomePageDao {
     @Query(
         """
         DELETE FROM home_pages
-        WHERE spaceKey = :spaceKey AND postureKey = :postureKey AND pageIndex = :pageIndex
+        WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey AND pageIndex = :pageIndex
         """,
     )
-    abstract suspend fun delete(spaceKey: String, postureKey: String, pageIndex: Int)
+    abstract suspend fun delete(surfaceKey: String, postureKey: String, pageIndex: Int)
 
-    @Query("DELETE FROM home_pages WHERE spaceKey = :spaceKey AND postureKey = :postureKey")
-    abstract suspend fun clear(spaceKey: String, postureKey: String)
+    @Query("DELETE FROM home_pages WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey")
+    abstract suspend fun clear(surfaceKey: String, postureKey: String)
 }

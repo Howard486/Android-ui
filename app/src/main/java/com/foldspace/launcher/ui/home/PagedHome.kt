@@ -50,6 +50,7 @@ import com.foldspace.launcher.notifications.NotificationSummary
 import com.foldspace.launcher.spaces.SpaceDensity
 import com.foldspace.launcher.ui.components.AppIcon
 import com.foldspace.launcher.ui.components.AppTile
+import com.foldspace.launcher.ui.icons.Squircle
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 import com.foldspace.launcher.ui.widgets.WidgetCell
 import com.foldspace.launcher.widgets.WidgetHostController
@@ -92,15 +93,20 @@ fun PagedHome(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     feedContent: (@Composable () -> Unit)? = null,
     workContent: (@Composable () -> Unit)? = null,
+    libraryContent: (@Composable () -> Unit)? = null,
+    dockContent: (@Composable () -> Unit)? = null,
 ) {
     val gridPages = layout.pages.ifEmpty { listOf(HomePage(0, emptyList())) }
     val leadingCount = if (layout.leading != null) 1 else 0
+    // iOS puts the App Library past the last page. It is a view of the same
+    // apps, so it costs the arrangement nothing to always be there.
+    val trailingCount = if (libraryContent != null) 1 else 0
     val pagerState = rememberPagerState(
         // Land on the first grid page, not on the feed. Opening the launcher
         // into a news feed rather than your apps would be the wrong default
         // however much the feed is worth having one swipe away.
         initialPage = leadingCount,
-        pageCount = { gridPages.size + leadingCount },
+        pageCount = { gridPages.size + leadingCount + trailingCount },
     )
 
     var drag by remember { mutableStateOf<DragState?>(null) }
@@ -125,12 +131,16 @@ fun PagedHome(
             ) { pagerIndex ->
                 val leading = layout.leading.takeIf { pagerIndex < leadingCount }
                 val page = gridPages.getOrNull(pagerIndex - leadingCount)
+                val isLibrary = trailingCount > 0 &&
+                    pagerIndex == gridPages.size + leadingCount
                 when {
                     leading == PageKind.Feed ->
                         feedContent?.invoke() ?: EmptyPage("尚未設定新聞來源")
 
                     leading == PageKind.Work ->
                         workContent?.invoke() ?: EmptyPage("尚無工項")
+
+                    isLibrary -> libraryContent?.invoke() ?: EmptyPage("沒有可分類的 App")
 
                     page == null -> EmptyPage("這一頁還是空的")
 
@@ -145,6 +155,8 @@ fun PagedHome(
                         pageIndex = page.index,
                         pagerState = pagerState,
                         leadingCount = leadingCount,
+                        trailingCount = trailingCount,
+                        visiblePages = gridPages,
                         onLaunch = onLaunch,
                         onLongPress = onLongPress,
                         onOpenFolder = onOpenFolder,
@@ -183,10 +195,11 @@ fun PagedHome(
             }
         }
 
-        if (gridPages.size + leadingCount > 1) {
+        if (gridPages.size + leadingCount + trailingCount > 1) {
             PageDots(
                 leading = layout.leading,
                 gridPages = gridPages,
+                trailingCount = trailingCount,
                 selected = pagerState.currentPage,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -194,6 +207,13 @@ fun PagedHome(
             )
         } else {
             Spacer(Modifier.height(20.dp))
+        }
+
+        // The dock sits under every page, the way iOS's does — it is outside
+        // the pager, so it does not scroll with the grid.
+        dockContent?.let {
+            it()
+            Spacer(Modifier.height(10.dp))
         }
     }
 }
@@ -216,6 +236,8 @@ private fun CellGrid(
     pageIndex: Int,
     pagerState: PagerState,
     leadingCount: Int,
+    trailingCount: Int,
+    visiblePages: List<HomePage>,
     onLaunch: (HomeItem) -> Unit,
     onLongPress: (HomeItem) -> Unit,
     onOpenFolder: (HomeItem) -> Unit,
@@ -246,8 +268,16 @@ private fun CellGrid(
     fun spanOf(item: HomeItem): Pair<Int, Int> =
         pendingResize?.takeIf { it.first == item.id }?.second ?: (item.spanX to item.spanY)
 
-    /** Pager positions include the leading page; stored page indices do not. */
-    fun gridPageAt(pagerPosition: Int) = pagerPosition - leadingCount
+    /**
+     * Pager position to stored page index.
+     *
+     * Not simple subtraction any more: a context can hide a page, so the
+     * visible pages are no longer numbered 0, 1, 2 — the stored index has to
+     * be read off the page itself, or a drag lands on a page the user is not
+     * looking at.
+     */
+    fun gridPageAt(pagerPosition: Int): Int =
+        visiblePages.getOrNull(pagerPosition - leadingCount)?.index ?: pageIndex
 
     // Dragging to an edge turns the page, which is the only practical way to
     // move an app across five pages.
@@ -260,8 +290,11 @@ private fun CellGrid(
             pointerX > gridSize.width - edge -> pagerState.currentPage + 1
             else -> return@LaunchedEffect
         }
-        // Never drag onto the leading page — it holds no cells.
-        if (next < leadingCount || next >= pagerState.pageCount) return@LaunchedEffect
+        // Neither the leading page nor the trailing App Library holds cells,
+        // so a drag must stop before both.
+        if (next < leadingCount || next >= pagerState.pageCount - trailingCount) {
+            return@LaunchedEffect
+        }
         delay(EDGE_DWELL_MS)
         pagerState.animateScrollToPage(next)
     }
@@ -302,7 +335,7 @@ private fun CellGrid(
                 onDragUpdate(
                     current.copy(
                         pointer = position,
-                        targetPage = gridPageAt(pagerState.currentPage).coerceAtLeast(0),
+                        targetPage = gridPageAt(pagerState.currentPage),
                         targetCell = cell,
                         targetItem = cell
                             ?.let { (x, y) -> page.occupantAt(x, y) }
@@ -354,7 +387,10 @@ private fun CellGrid(
                 Modifier
                     .gridCell(item.cellX, item.cellY, spanX, spanY)
                     .padding(2.dp)
-                    .alpha(if (isBeingDragged) 0.25f else 1f),
+                    .alpha(if (isBeingDragged) 0.25f else 1f)
+                    // Widgets carry their own edit frame; wobbling a live
+                    // widget as well would be noise on top of a control.
+                    .jiggle(active = editing && item.type != HomeItemType.Widget, seed = item.id),
                 contentAlignment = Alignment.Center,
             ) {
                 HomeCell(
@@ -373,6 +409,15 @@ private fun CellGrid(
                     },
                     onLongClick = { onLongPress(item) },
                 )
+
+                // iOS's ✕ badge. Apps and folders get one in edit mode;
+                // widgets get theirs from the resize frame below.
+                if (editing && item.type != HomeItemType.Widget) {
+                    RemoveBadge(
+                        onClick = { onRemoveItem(item) },
+                        modifier = Modifier.align(Alignment.TopStart),
+                    )
+                }
 
                 if (editing && item.type == HomeItemType.Widget) {
                     WidgetEditFrame(
@@ -394,6 +439,26 @@ private fun CellGrid(
                 }
             }
         }
+    }
+}
+
+/** The ✕ that appears on every icon in edit mode, as iOS does it. */
+@Composable
+private fun RemoveBadge(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val tokens = FoldSpaceTheme.tokens
+    Box(
+        modifier
+            .size(22.dp)
+            .clip(CircleShape)
+            .background(tokens.surfaceElevated)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "✕",
+            style = MaterialTheme.typography.labelSmall,
+            color = tokens.textPrimary,
+        )
     }
 }
 
@@ -483,7 +548,9 @@ private fun FolderCell(item: HomeItem, density: SpaceDensity, onClick: () -> Uni
         Box(
             Modifier
                 .size(density.iconSizeDp.dp)
-                .clip(RoundedCornerShape(tokens.iconCornerRadius))
+                // The same silhouette the icons inside it have; a folder in a
+                // different shape is the one tile that breaks the row.
+                .clip(Squircle.Shape)
                 .background(tokens.surfaceElevated)
                 .padding(6.dp),
             contentAlignment = Alignment.Center,
@@ -544,27 +611,30 @@ private fun EmptyPage(message: String) {
 private fun PageDots(
     leading: PageKind?,
     gridPages: List<HomePage>,
+    trailingCount: Int,
     selected: Int,
     modifier: Modifier = Modifier,
 ) {
     val tokens = FoldSpaceTheme.tokens
     val leadingCount = if (leading != null) 1 else 0
+    val total = leadingCount + gridPages.size + trailingCount
 
     Row(
         modifier,
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        repeat(leadingCount + gridPages.size) { index ->
+        repeat(total) { index ->
             val isSelected = index == selected
-            val isLeading = index < leadingCount
-            // The leading page gets a wider marker so it is findable by its dot
-            // rather than by swiping to see what is over there.
+            // The two pages that are not grids get a wider marker, so they are
+            // findable by their dot rather than by swiping to see what is over
+            // there.
+            val isWide = index < leadingCount || index >= total - trailingCount
             Box(
                 Modifier
                     .padding(horizontal = 3.dp)
                     .size(
-                        width = if (isLeading) 14.dp else if (isSelected) 7.dp else 5.dp,
+                        width = if (isWide) 14.dp else if (isSelected) 7.dp else 5.dp,
                         height = if (isSelected) 7.dp else 5.dp,
                     )
                     .clip(CircleShape)

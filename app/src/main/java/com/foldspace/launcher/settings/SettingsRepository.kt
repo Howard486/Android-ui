@@ -35,12 +35,39 @@ enum class ThemeId(val key: String, val displayName: String) {
     }
 }
 
+/**
+ * How dense the home grid is.
+ *
+ * Both postures are named here rather than deriving one from the other: the
+ * inner screen is roughly 2.4x the cover screen's width, so any single
+ * multiplier is wrong for at least one of the choices.
+ */
+enum class GridChoice(
+    val key: String,
+    val displayName: String,
+    val foldedColumns: Int,
+    val foldedRows: Int,
+    val unfoldedColumns: Int,
+    val unfoldedRows: Int,
+) {
+    /** iPhone's own grid. ~96dp a cell on a Fold cover screen. */
+    Ios("ios", "4 × 6（iOS）", 4, 6, 8, 6),
+    Balanced("balanced", "5 × 6", 5, 6, 9, 6),
+    Dense("dense", "5 × 7", 5, 7, 10, 7),
+    ;
+
+    companion object {
+        fun fromKey(key: String?): GridChoice = entries.firstOrNull { it.key == key } ?: Ios
+    }
+}
+
 /** Everything the user can change. One object so the UI observes a single flow. */
 data class FoldSpaceSettings(
     val currentSpace: SpaceId = SpaceId.General,
     val switchMode: SwitchMode = SwitchMode.SuggestFirst,
     val powerMode: PowerMode = PowerMode.Smart,
     val themeId: ThemeId = ThemeId.Minimal,
+    val gridChoice: GridChoice = GridChoice.Ios,
     /** §6.1 — on by default on Samsung hardware, and never silently disabled. */
     val samsungWalletCompatibility: Boolean = true,
     val notificationContentAnalysis: Boolean = true,
@@ -78,6 +105,8 @@ class SettingsRepository(
 
     suspend fun setTheme(theme: ThemeId) = edit { it[Keys.Theme] = theme.key }
 
+    suspend fun setGridChoice(choice: GridChoice) = edit { it[Keys.Grid] = choice.key }
+
     suspend fun setSamsungWalletCompatibility(enabled: Boolean) =
         edit { it[Keys.SamsungWallet] = enabled }
 
@@ -114,6 +143,7 @@ class SettingsRepository(
             ?.let { name -> PowerMode.entries.firstOrNull { it.name == name } }
             ?: PowerMode.Smart,
         themeId = ThemeId.fromKey(prefs[Keys.Theme]),
+        gridChoice = GridChoice.fromKey(prefs[Keys.Grid]),
         samsungWalletCompatibility = prefs[Keys.SamsungWallet] ?: true,
         notificationContentAnalysis = prefs[Keys.ContentAnalysis] ?: true,
         excludedNotificationPackages = prefs[Keys.ExcludedPackages].orEmpty(),
@@ -131,6 +161,7 @@ class SettingsRepository(
         val SwitchMode = stringPreferencesKey("switch_mode")
         val PowerMode = stringPreferencesKey("power_mode")
         val Theme = stringPreferencesKey("theme")
+        val Grid = stringPreferencesKey("grid_choice")
         val SamsungWallet = booleanPreferencesKey("samsung_wallet_compat")
         val ContentAnalysis = booleanPreferencesKey("notification_content_analysis")
         val ExcludedPackages = stringSetPreferencesKey("excluded_notification_packages")

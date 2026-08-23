@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.foldspace.launcher.ai.NanoUnavailableReason
 import com.foldspace.launcher.context.SwitchMode
+import com.foldspace.launcher.settings.GridChoice
 import com.foldspace.launcher.settings.PowerMode
 import com.foldspace.launcher.settings.ThemeId
 import com.foldspace.launcher.ui.LauncherUiState
@@ -42,6 +43,7 @@ fun SettingsScreen(
     state: LauncherUiState,
     nanoAvailability: NanoUnavailableReason,
     onSetTheme: (ThemeId) -> Unit,
+    onSetGridChoice: (GridChoice) -> Unit,
     onSetPowerMode: (PowerMode) -> Unit,
     onSetSwitchMode: (SwitchMode) -> Unit,
     onSetWalletCompatibility: (Boolean) -> Unit,
@@ -193,6 +195,18 @@ fun SettingsScreen(
                 options = PowerMode.entries.map { it to it.label() },
                 selected = state.settings.powerMode,
                 onSelect = onSetPowerMode,
+            )
+        }
+
+        // The iOS home doc: the grid is the user's call, 4x6 by default.
+        item {
+            ChoiceCard(
+                title = "桌面格線",
+                description = "4 × 6 是 iPhone 的間距。變更會依現有順序重新排列桌面 —— " +
+                    "第一個圖示仍然是第一個，但位置會重排。",
+                options = GridChoice.entries.map { it to it.displayName },
+                selected = state.settings.gridChoice,
+                onSelect = onSetGridChoice,
             )
         }
 

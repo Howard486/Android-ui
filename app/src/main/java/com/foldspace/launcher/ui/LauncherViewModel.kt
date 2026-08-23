@@ -14,8 +14,10 @@ import com.foldspace.launcher.context.signals.UsageSignalSource
 import com.foldspace.launcher.core.launcher.AppEntry
 import com.foldspace.launcher.core.launcher.ProfileType
 import com.foldspace.launcher.feed.FeedState
+import com.foldspace.launcher.home.AppCategory
 import com.foldspace.launcher.home.HomeItem
 import com.foldspace.launcher.home.HomeLayout
+import com.foldspace.launcher.home.HomeSurface
 import com.foldspace.launcher.home.PageKind
 import com.foldspace.launcher.home.Posture
 import com.foldspace.launcher.work.WorkItemsDeriver
@@ -26,6 +28,7 @@ import com.foldspace.launcher.notifications.NotificationSummary
 import com.foldspace.launcher.powerdock.PowerDockResolver
 import com.foldspace.launcher.powerdock.PowerDockState
 import com.foldspace.launcher.settings.FoldSpaceSettings
+import com.foldspace.launcher.settings.GridChoice
 import com.foldspace.launcher.settings.PowerMode
 import com.foldspace.launcher.settings.ThemeId
 import com.foldspace.launcher.spaces.SpaceConfig
@@ -168,11 +171,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.Eagerly, Posture.Folded)
 
+    /** The grid density the user picked; 4x6 by default (§ iOS home doc). */
+    private val gridChoice: StateFlow<GridChoice> = container.settings.settings
+        .map { it.gridChoice }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, GridChoice.Ios)
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val homeLayout: StateFlow<HomeLayout> =
-        combine(container.settings.currentSpace, posture) { space, p -> space to p }
+        combine(container.settings.currentSpace, posture, gridChoice) { space, p, grid ->
+            Triple(space, p, grid)
+        }
             .distinctUntilChanged()
-            .flatMapLatest { (space, p) -> container.homeLayout.observe(space, p) }
+            .flatMapLatest { (space, p, grid) -> container.homeLayout.observe(space, p, grid) }
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(5_000),
@@ -191,6 +202,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val organiseMessage: StateFlow<String?> = _organiseMessage.asStateFlow()
 
     val feedState: StateFlow<FeedState> = container.feed.state
+
+    /**
+     * Categories for the App Library page.
+     *
+     * The same ladder one-tap organise uses, read rather than applied: the
+     * Library groups a *view* of the apps and never moves an icon, so it needs
+     * no snapshot and no undo.
+     */
+    val appCategories: StateFlow<Map<String, AppCategory>> = container.launcherApps.apps
+        .map { apps ->
+            if (apps.isEmpty()) return@map emptyMap()
+            val result = container.categorizer.categorise(apps)
+            result.categorised + container.categorizer.fallbackForUnknown(result.unknown)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     /** §6 — work items derived from notifications, never from a mailbox. */
     val workItems: StateFlow<WorkItemsState> = NotificationRepository.summary
@@ -274,10 +300,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             container.launcherApps.apps
                 .filter { it.isNotEmpty() }
                 .collect { apps ->
-                    for (space in SpaceId.entries) {
-                        container.homeLayout.seedIfEmpty(space, Posture.Folded, apps)
+                    val grid = gridChoice.value
+                    // 簡易 is seeded too, so its four slots are never empty on
+                    // first run; the user replaces them from settings.
+                    for (surface in HomeSurface.entries) {
+                        container.homeLayout.seedIfEmpty(surface, Posture.Folded, apps, grid)
                     }
-                    container.homeLayout.syncInstalled(apps)
+                    container.homeLayout.syncInstalled(apps, grid)
                 }
         }
         viewModelScope.launch {
@@ -285,8 +314,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             // first time the device is opened, then never re-synced (§4.2).
             posture.collect { current ->
                 if (current != Posture.Unfolded) return@collect
-                for (space in SpaceId.entries) {
-                    container.homeLayout.seedPostureFrom(space, Posture.Folded, Posture.Unfolded)
+                for (surface in HomeSurface.entries) {
+                    container.homeLayout.seedPostureFrom(
+                        surface,
+                        Posture.Folded,
+                        Posture.Unfolded,
+                        gridChoice.value,
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            // Changing the grid leaves every stored cell meaningless, so the
+            // desktop is repacked. The packer is idempotent, so collecting the
+            // setting rather than watching for a change is safe and means a
+            // layout left over from an older grid is repaired on next launch.
+            gridChoice.collect { grid ->
+                for (posture in Posture.entries) {
+                    container.homeLayout.reflow(HomeSurface.Desktop, posture, grid)
                 }
             }
         }
@@ -424,12 +469,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val categories = result.categorised + container.categorizer.fallbackForUnknown(result.unknown)
 
         val outcome = container.homeLayout.organiseIntoFolders(
-            space = state.value.space,
-            posture = if (state.value.window.layoutMode == LayoutMode.Compact) {
-                Posture.Folded
-            } else {
-                Posture.Unfolded
-            },
+            surface = HomeSurface.of(state.value.space),
+            posture = currentPosture(),
+            choice = gridChoice.value,
             categories = categories,
         )
 
@@ -529,8 +571,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 cellHeightDp = cellHeightDp,
             )
             container.homeLayout.addWidget(
-                space = state.value.space,
+                surface = HomeSurface.of(state.value.space),
                 posture = currentPosture(),
+                choice = gridChoice.value,
                 pageIndex = cell.first,
                 cellX = cell.second,
                 cellY = cell.third,
@@ -564,9 +607,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         container.homeLayout.removeItem(item.id)
     }
 
+    /**
+     * A page the user reserved for widgets.
+     *
+     * Scoped to the context it was created in, which is the point of the Focus
+     * model: a work-only widget page should not follow you into 通用.
+     */
     fun addWidgetPage() = viewModelScope.launch {
-        container.homeLayout.addPage(state.value.space, currentPosture(), PageKind.Widgets)
+        container.homeLayout.addPage(
+            surface = HomeSurface.of(state.value.space),
+            posture = currentPosture(),
+            kind = PageKind.Widgets,
+            contexts = setOf(state.value.space),
+        )
     }
+
+    fun setGridChoice(choice: GridChoice) =
+        viewModelScope.launch { container.settings.setGridChoice(choice) }
 
     fun refreshFeed(force: Boolean = false) = viewModelScope.launch {
         container.feed.refreshIfStale(force)

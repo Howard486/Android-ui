@@ -17,13 +17,17 @@ import androidx.room.PrimaryKey
  * otherwise invisible until the user sees one icon drawn on top of another.
  * Folder members are excluded from it by construction, since they all share
  * cell (-1,-1).
+ *
+ * Keyed on `surfaceKey`, not on a Space. 通用 and 工作 share one arrangement
+ * and differ only in which pages they show; keeping a row per Space meant an
+ * app placed in one context did not exist in the other.
  */
 @Entity(
     tableName = "home_items",
     indices = [
-        Index(value = ["spaceKey", "postureKey", "pageIndex"]),
+        Index(value = ["surfaceKey", "postureKey", "pageIndex"]),
         Index(
-            value = ["spaceKey", "postureKey", "container", "pageIndex", "cellX", "cellY"],
+            value = ["surfaceKey", "postureKey", "container", "pageIndex", "cellX", "cellY"],
             unique = true,
         ),
     ],
@@ -31,7 +35,7 @@ import androidx.room.PrimaryKey
 data class HomeItemEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
 
-    val spaceKey: String,
+    val surfaceKey: String,
     val postureKey: String,
 
     @ColumnInfo(defaultValue = "-1")

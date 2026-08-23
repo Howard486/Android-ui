@@ -20,25 +20,25 @@ abstract class HomeItemDao {
     @Query(
         """
         SELECT * FROM home_items
-        WHERE spaceKey = :spaceKey AND postureKey = :postureKey
+        WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey
         ORDER BY pageIndex, cellY, cellX, sortOrder
         """,
     )
-    abstract fun observeLayout(spaceKey: String, postureKey: String): Flow<List<HomeItemEntity>>
+    abstract fun observeLayout(surfaceKey: String, postureKey: String): Flow<List<HomeItemEntity>>
 
     @Query(
         """
         SELECT * FROM home_items
-        WHERE spaceKey = :spaceKey AND postureKey = :postureKey
+        WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey
         ORDER BY pageIndex, cellY, cellX, sortOrder
         """,
     )
-    abstract suspend fun getLayout(spaceKey: String, postureKey: String): List<HomeItemEntity>
+    abstract suspend fun getLayout(surfaceKey: String, postureKey: String): List<HomeItemEntity>
 
     @Query(
-        "SELECT COUNT(*) FROM home_items WHERE spaceKey = :spaceKey AND postureKey = :postureKey",
+        "SELECT COUNT(*) FROM home_items WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey",
     )
-    abstract suspend fun countIn(spaceKey: String, postureKey: String): Int
+    abstract suspend fun countIn(surfaceKey: String, postureKey: String): Int
 
     @Query("SELECT * FROM home_items WHERE id = :id")
     abstract suspend fun getById(id: Long): HomeItemEntity?
@@ -46,14 +46,14 @@ abstract class HomeItemDao {
     @Query(
         """
         SELECT * FROM home_items
-        WHERE spaceKey = :spaceKey AND postureKey = :postureKey
+        WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey
           AND container = -1 AND pageIndex = :pageIndex
           AND cellX = :cellX AND cellY = :cellY
         LIMIT 1
         """,
     )
     abstract suspend fun itemAt(
-        spaceKey: String,
+        surfaceKey: String,
         postureKey: String,
         pageIndex: Int,
         cellX: Int,
@@ -80,25 +80,44 @@ abstract class HomeItemDao {
     abstract suspend fun deleteById(id: Long)
 
     /**
-     * Removing an app removes it wherever it sits, in every Space and both
+     * Removing an app removes it wherever it sits, on every surface and in both
      * postures — an uninstalled app has no business keeping a cell.
      */
     @Query("DELETE FROM home_items WHERE itemType = 'app' AND packageName = :packageName")
     abstract suspend fun deleteByPackage(packageName: String)
 
-    @Query("DELETE FROM home_items WHERE spaceKey = :spaceKey AND postureKey = :postureKey")
-    abstract suspend fun clearLayout(spaceKey: String, postureKey: String)
+    @Query("DELETE FROM home_items WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey")
+    abstract suspend fun clearLayout(surfaceKey: String, postureKey: String)
 
     @Transaction
-    open suspend fun replaceLayout(spaceKey: String, postureKey: String, items: List<HomeItemEntity>) {
-        clearLayout(spaceKey, postureKey)
+    open suspend fun replaceLayout(surfaceKey: String, postureKey: String, items: List<HomeItemEntity>) {
+        clearLayout(surfaceKey, postureKey)
         insertAll(items)
+    }
+
+    /**
+     * Rewrites the desktop rows' cells, keeping their ids.
+     *
+     * Ids matter here: folder members point at their folder's id, so the
+     * delete-and-reinsert that [replaceLayout] does would orphan every folder.
+     *
+     * Every row is parked on a scratch page first. Writing final positions one
+     * at a time would collide with rows that have not moved yet, and the
+     * unique index turns that into a failure rather than a silent overwrite —
+     * which is the point of the index, but it has to be worked with.
+     */
+    @Transaction
+    open suspend fun repackDesktop(rows: List<HomeItemEntity>) {
+        rows.forEachIndexed { index, row ->
+            update(row.copy(pageIndex = REPACK_PAGE, cellX = index, cellY = 0))
+        }
+        rows.forEach { update(it) }
     }
 
     /**
      * Moves an item to a cell, swapping with whatever is already there.
      *
-     * The unique index on (space, posture, container, page, x, y) makes a naive
+     * The unique index on (surface, posture, container, page, x, y) makes a naive
      * two-step swap fail halfway, so the moving row is parked on a sentinel
      * cell first. The whole thing is one transaction — a swap that got half way
      * would leave two icons stacked, which is precisely what that index exists
@@ -113,7 +132,7 @@ abstract class HomeItemDao {
             return
         }
 
-        val occupant = itemAt(moving.spaceKey, moving.postureKey, pageIndex, cellX, cellY)
+        val occupant = itemAt(moving.surfaceKey, moving.postureKey, pageIndex, cellX, cellY)
 
         update(moving.copy(pageIndex = PARK_PAGE, cellX = PARK_CELL, cellY = PARK_CELL))
 
@@ -157,7 +176,7 @@ abstract class HomeItemDao {
 
         val folderId = insert(
             HomeItemEntity(
-                spaceKey = target.spaceKey,
+                surfaceKey = target.surfaceKey,
                 postureKey = target.postureKey,
                 pageIndex = PARK_PAGE,
                 cellX = PARK_CELL,
@@ -261,5 +280,11 @@ abstract class HomeItemDao {
          */
         const val PARK_PAGE = -99
         const val PARK_CELL = -99
+
+        /**
+         * A second sentinel page, distinct from [PARK_PAGE] so that a repack
+         * in progress cannot land on a cell a folder member is holding.
+         */
+        const val REPACK_PAGE = -98
     }
 }

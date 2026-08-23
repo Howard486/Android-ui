@@ -47,7 +47,9 @@ import com.foldspace.launcher.ui.home.FolderSheet
 import com.foldspace.launcher.ui.widgets.WidgetPicker
 import com.foldspace.launcher.ui.work.WorkItemsPage
 import com.foldspace.launcher.ui.drawer.AppSearchOverlay
+import com.foldspace.launcher.ui.home.AppLibraryPage
 import com.foldspace.launcher.ui.home.BookHome
+import com.foldspace.launcher.ui.home.HomeDock
 import com.foldspace.launcher.ui.home.PagedHome
 import com.foldspace.launcher.ui.home.SimpleHome
 import com.foldspace.launcher.ui.home.GestureZones
@@ -94,6 +96,7 @@ fun FoldSpaceRoot(
     val workItems by viewModel.workItems.collectAsStateWithLifecycle()
     val organiseMessage by viewModel.organiseMessage.collectAsStateWithLifecycle()
     val widgetPickerOpen by viewModel.widgetPickerOpen.collectAsStateWithLifecycle()
+    val appCategories by viewModel.appCategories.collectAsStateWithLifecycle()
 
     val openFolder = remember(openFolderId, homeLayout) {
         openFolderId?.let { id ->
@@ -147,7 +150,7 @@ fun FoldSpaceRoot(
                 contentPadding = systemPadding,
             )
         } else {
-            HomeSurface(
+            HomeScaffold(
                 state = state,
                 layout = homeLayout,
                 onLaunchItem = viewModel::launch,
@@ -175,6 +178,18 @@ fun FoldSpaceRoot(
                         state = workItems,
                         onOpenApp = onOpenPackage,
                         onRequestNotificationAccess = onOpenNotificationSettings,
+                        contentPadding = bodyPadding,
+                    )
+                },
+                libraryContent = {
+                    AppLibraryPage(
+                        apps = state.apps,
+                        categories = appCategories,
+                        notifications = state.notifications,
+                        density = state.spaceConfig.density,
+                        columns = homeLayout.grid.columns,
+                        onLaunch = viewModel::launch,
+                        onLongPress = viewModel::openAppInfo,
                         contentPadding = bodyPadding,
                     )
                 },
@@ -260,6 +275,7 @@ fun FoldSpaceRoot(
                 state = state,
                 nanoAvailability = viewModel.nanoAvailability(),
                 onSetTheme = { viewModel.setTheme(it) },
+                onSetGridChoice = { viewModel.setGridChoice(it) },
                 onSetPowerMode = { viewModel.setPowerMode(it) },
                 onSetSwitchMode = { viewModel.setSwitchMode(it) },
                 onSetWalletCompatibility = { viewModel.setSamsungWalletCompatibility(it) },
@@ -291,7 +307,7 @@ private fun Overlay(visible: Boolean, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun HomeSurface(
+private fun HomeScaffold(
     state: LauncherUiState,
     layout: HomeLayout,
     onLaunchItem: (HomeItem) -> Unit,
@@ -308,6 +324,7 @@ private fun HomeSurface(
     onCellMeasured: (Int, Int) -> Unit,
     feedContent: @Composable () -> Unit,
     workContent: @Composable () -> Unit,
+    libraryContent: @Composable () -> Unit,
     onLaunch: (AppEntry) -> Unit,
     onLongPress: (AppEntry) -> Unit,
     onSwipeUp: () -> Unit,
@@ -385,6 +402,16 @@ private fun HomeSurface(
                 contentPadding = bodyPadding,
                 feedContent = feedContent,
                 workContent = workContent,
+                libraryContent = libraryContent,
+                dockContent = {
+                    HomeDock(
+                        apps = state.dockApps(),
+                        notifications = state.notifications,
+                        density = state.spaceConfig.density,
+                        onLaunch = onLaunch,
+                        onLongPress = onLongPress,
+                    )
+                },
             )
         }
 
