@@ -35,9 +35,18 @@ data class LayoutBackup(
     val version: Int = FORMAT_VERSION,
     val items: List<BackupItem>,
     val pages: List<BackupPage>,
+    /**
+     * Settings worth carrying: automation rules, app pairs, dock pins, theme,
+     * grid, icon pack.
+     *
+     * Version 1 wrote only the arrangement, which made "backup" a promise it
+     * did not keep — restoring left every rule and pair behind. A v1 file
+     * still restores; this map is simply empty.
+     */
+    val settings: Map<String, Set<String>> = emptyMap(),
 ) {
     companion object {
-        const val FORMAT_VERSION = 1
+        const val FORMAT_VERSION = 2
     }
 }
 
@@ -61,6 +70,11 @@ object LayoutBackupCodec {
 
     fun encode(backup: LayoutBackup): String = buildString {
         append(HEADER).append(FIELD).append(backup.version).append('\n')
+        backup.settings.forEach { (key, values) ->
+            append(
+                (listOf("S", key) + values.map { it.sanitised() }).joinToString(FIELD),
+            ).append('\n')
+        }
         backup.pages.forEach { page ->
             append(
                 listOf(
@@ -105,16 +119,31 @@ object LayoutBackupCodec {
 
         val items = mutableListOf<BackupItem>()
         val pages = mutableListOf<BackupPage>()
+        val settings = mutableMapOf<String, Set<String>>()
 
         for (line in lines.drop(1)) {
             val parts = line.split(FIELD)
             when (parts.firstOrNull()) {
                 "P" -> decodePage(parts)?.let(pages::add)
                 "I" -> decodeItem(parts)?.let(items::add)
+                "S" -> decodeSetting(parts)?.let { (key, values) -> settings[key] = values }
+                // An unknown tag is a line from a newer format. Skipping it is
+                // what lets a v1 reader survive a v2 file.
                 else -> Unit
             }
         }
-        return LayoutBackup(version = version, items = items, pages = pages)
+        return LayoutBackup(
+            version = version,
+            items = items,
+            pages = pages,
+            settings = settings,
+        )
+    }
+
+    private fun decodeSetting(parts: List<String>): Pair<String, Set<String>>? {
+        if (parts.size < 2) return null
+        val key = parts[1].ifBlank { return null }
+        return key to parts.drop(2).filter { it.isNotBlank() }.toSet()
     }
 
     private fun String.sanitised(): String = filter { it.code >= 0x20 }
@@ -154,10 +183,12 @@ data class RestoreOutcome(
     val itemsRestored: Int,
     val appsMissing: Int,
     val widgetsDropped: Int,
+    val settingsRestored: Boolean = false,
 ) {
     fun describe(): String = buildString {
         append("已還原 ").append(itemsRestored).append(" 個項目")
+        if (settingsRestored) append("與設定")
         if (appsMissing > 0) append("，").append(appsMissing).append(" 個 App 未安裝已略過")
-        if (widgetsDropped > 0) append("，小工具需重新新增")
+        append("，小工具需重新新增")
     }
 }

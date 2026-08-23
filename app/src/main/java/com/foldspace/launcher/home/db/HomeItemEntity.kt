@@ -63,6 +63,9 @@ data class HomeItemEntity(
     // Widget
     val appWidgetId: Int? = null,
     val widgetProvider: String? = null,
+
+    /** Shortcut: the id its publishing app assigned. */
+    val shortcutId: String? = null,
 ) {
     companion object {
         const val CONTAINER_DESKTOP = -1L

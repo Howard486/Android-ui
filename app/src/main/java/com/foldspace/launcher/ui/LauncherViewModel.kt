@@ -10,13 +10,16 @@ import com.foldspace.launcher.context.ContextEvent
 import com.foldspace.launcher.context.AutomationRule
 import com.foldspace.launcher.context.SpaceSuggestion
 import com.foldspace.launcher.context.signals.BluetoothSignalSource
+import com.foldspace.launcher.context.signals.CalendarSignalSource
 import com.foldspace.launcher.context.signals.PowerSignalSource
 import com.foldspace.launcher.context.signals.UsageSignalSource
 import com.foldspace.launcher.core.launcher.AppEntry
 import com.foldspace.launcher.core.launcher.ProfileType
+import com.foldspace.launcher.core.shortcuts.AppShortcut
 import com.foldspace.launcher.feed.FeedState
 import com.foldspace.launcher.home.AppCategory
 import com.foldspace.launcher.home.HomeItem
+import com.foldspace.launcher.home.HomeItemType
 import com.foldspace.launcher.home.GridSpec
 import com.foldspace.launcher.home.HomeLayout
 import com.foldspace.launcher.home.HomeSurface
@@ -75,6 +78,7 @@ data class LauncherUiState(
     val isDefaultHome: Boolean = false,
     val hasNotificationAccess: Boolean = false,
     val hasUsageAccess: Boolean = false,
+    val hasCalendarAccess: Boolean = false,
     val powerSaveActive: Boolean = false,
 ) {
     val space: SpaceId get() = settings.currentSpace
@@ -131,6 +135,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val powerSignals = PowerSignalSource(application, ::onContextEvent)
     private val bluetoothSignals = BluetoothSignalSource(application, ::onContextEvent)
     private val usageSignals = UsageSignalSource(application, ::onContextEvent)
+    private val calendarSignals = CalendarSignalSource(application, ::onContextEvent)
 
     private val _window = MutableStateFlow(FoldWindowState())
     private val _permissions = MutableStateFlow(PermissionState())
@@ -139,6 +144,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val defaultHome: Boolean = false,
         val notificationAccess: Boolean = false,
         val usageAccess: Boolean = false,
+        val calendarAccess: Boolean = false,
     )
 
     val state: StateFlow<LauncherUiState> = combine(
@@ -164,6 +170,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             isDefaultHome = permissions.defaultHome,
             hasNotificationAccess = permissions.notificationAccess,
             hasUsageAccess = permissions.usageAccess,
+            hasCalendarAccess = permissions.calendarAccess,
             powerSaveActive = snapshot.powerSave,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LauncherUiState())
@@ -316,8 +323,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /** The file's whole contents, for the Activity to write through the SAF. */
-    suspend fun exportLayoutText(): String =
-        LayoutBackupCodec.encode(container.homeLayout.exportLayout())
+    suspend fun exportLayoutText(): String {
+        val layout = container.homeLayout.exportLayout()
+        return LayoutBackupCodec.encode(
+            layout.copy(settings = container.settings.exportable(state.value.settings)),
+        )
+    }
 
     /** The Activity owns the file I/O; only it knows whether the write landed. */
     fun reportBackupResult(succeeded: Boolean) {
@@ -331,7 +342,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             return@launch
         }
         val outcome = container.homeLayout.importLayout(backup, state.value.apps)
-        _transientMessage.value = outcome.describe()
+        if (backup.settings.isNotEmpty()) container.settings.importSettings(backup.settings)
+        _transientMessage.value = outcome
+            .copy(settingsRestored = backup.settings.isNotEmpty())
+            .describe()
     }
 
     // ---- Widgets (phase 4) ----
@@ -506,6 +520,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             ),
         )
         usageSignals.refreshIfStale()
+        // §12.1 rule 4 — read on resume, never on a timer.
+        calendarSignals.refresh(System.currentTimeMillis())
         refreshPermissions()
     }
 
@@ -527,6 +543,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             defaultHome = container.homeRole.isDefaultHome,
             notificationAccess = FoldSpaceNotificationListener.isAccessGranted(app),
             usageAccess = usageSignals.hasUsageAccess(),
+            calendarAccess = calendarSignals.hasPermission(),
         )
     }
 
@@ -546,11 +563,50 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun launch(item: HomeItem) {
+        if (item.type == HomeItemType.Shortcut) {
+            val id = item.shortcutId
+            val packageName = item.shortcutPackage ?: item.app?.packageName
+            val user = item.app?.user
+            if (id != null && packageName != null && user != null &&
+                container.shortcuts.launch(packageName, id, user)
+            ) {
+                return
+            }
+            // A shortcut whose app revoked it: falling back to the app itself
+            // beats a tap that does nothing.
+            item.app?.let(::launch)
+            return
+        }
         item.app?.let(::launch)
     }
 
+    /**
+     * §5.3 — long-press opens the app's own shortcuts, not App Info.
+     *
+     * It used to go straight to App Info, which is the least useful of the
+     * actions available and the one nobody long-presses for.
+     */
+    private val _longPressItem = MutableStateFlow<HomeItem?>(null)
+    val longPressItem: StateFlow<HomeItem?> = _longPressItem.asStateFlow()
+
     fun onHomeItemLongPress(item: HomeItem) {
-        item.app?.let(::openAppInfo)
+        if (item.type == HomeItemType.Widget) return
+        _longPressItem.value = item
+    }
+
+    fun dismissLongPress() {
+        _longPressItem.value = null
+    }
+
+    fun shortcutsFor(item: HomeItem): List<AppShortcut> =
+        item.app?.let(container.shortcuts::shortcutsFor).orEmpty()
+
+    /** False when FoldSpace is not the default home app, which gates the query. */
+    fun shortcutsAvailable(): Boolean = container.shortcuts.available()
+
+    fun launchShortcut(shortcut: AppShortcut) {
+        dismissLongPress()
+        container.shortcuts.launch(shortcut)
     }
 
     /** 簡易 — the user picks exactly which four apps appear. */
@@ -747,7 +803,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun removeItem(item: HomeItem) = viewModelScope.launch {
-        if (item.type == com.foldspace.launcher.home.HomeItemType.Widget) {
+        if (item.type == HomeItemType.Widget) {
             item.appWidgetId?.let(container.widgetHost::releaseId)
         }
         container.homeLayout.removeItem(item.id)

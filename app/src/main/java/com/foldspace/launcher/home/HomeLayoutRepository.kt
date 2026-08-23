@@ -257,6 +257,83 @@ class HomeLayoutRepository(
         )
     }
 
+    /**
+     * Places something an app asked to pin, at the first free cell.
+     *
+     * Separate from [addWidget] because the caller is [com.foldspace.launcher
+     * .PinRequestActivity], which has no layout observer and no ViewModel —
+     * it is launched by the system, does one thing and finishes. Making it
+     * find a cell for itself would mean duplicating the occupancy rules.
+     */
+    private suspend fun firstFreeCell(
+        surface: HomeSurface,
+        posture: Posture,
+        grid: GridSpec,
+    ): Triple<Int, Int, Int> {
+        val existing = dao.getLayout(surface.key, posture.key)
+        val slot = nextFreeSlot(existing, grid)
+        return Triple(
+            slot / grid.cellsPerPage,
+            (slot % grid.cellsPerPage) % grid.columns,
+            (slot % grid.cellsPerPage) / grid.columns,
+        )
+    }
+
+    /** §5.3 — a shortcut an app asked to pin. */
+    suspend fun addPinnedShortcut(
+        surface: HomeSurface,
+        posture: Posture,
+        choice: GridChoice,
+        shortcutId: String,
+        packageName: String,
+        label: String,
+    ) {
+        val grid = GridSpec.of(surface, posture, choice)
+        val (page, x, y) = firstFreeCell(surface, posture, grid)
+        dao.insert(
+            HomeItemEntity(
+                surfaceKey = surface.key,
+                postureKey = posture.key,
+                pageIndex = page,
+                cellX = x,
+                cellY = y,
+                itemType = HomeItemType.Shortcut.key,
+                packageName = packageName,
+                shortcutId = shortcutId,
+                // The shortcut's own label, stored where a folder keeps its
+                // title: both are a name the user sees and neither belongs to
+                // an installed-app lookup.
+                folderTitle = label,
+            ),
+        )
+    }
+
+    /** A widget an app asked to pin, already bound by the system. */
+    suspend fun addPinnedWidget(
+        surface: HomeSurface,
+        posture: Posture,
+        choice: GridChoice,
+        appWidgetId: Int,
+        provider: String,
+        spanX: Int,
+        spanY: Int,
+    ) {
+        val grid = GridSpec.of(surface, posture, choice)
+        val (page, x, y) = firstFreeCell(surface, posture, grid)
+        addWidget(
+            surface = surface,
+            posture = posture,
+            choice = choice,
+            pageIndex = page,
+            cellX = x,
+            cellY = y,
+            appWidgetId = appWidgetId,
+            provider = provider,
+            spanX = spanX,
+            spanY = spanY,
+        )
+    }
+
     /** §13 — the user pulling a widget's edge to a new number of cells. */
     suspend fun resizeItem(itemId: Long, spanX: Int, spanY: Int) =
         dao.setSpan(itemId, spanX.coerceAtLeast(1), spanY.coerceAtLeast(1))
@@ -692,6 +769,8 @@ class HomeLayoutRepository(
                     .sortedBy { it.sortOrder }
                     .map(::toItem),
                 appWidgetId = row.appWidgetId,
+                shortcutId = row.shortcutId,
+                shortcutPackage = row.packageName.takeIf { type == HomeItemType.Shortcut },
                 unavailable = type == HomeItemType.App && app == null,
             )
         }

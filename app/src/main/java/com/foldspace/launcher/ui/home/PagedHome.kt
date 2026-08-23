@@ -406,9 +406,11 @@ private fun CellGrid(
             ) {
                 HomeCell(
                     item = item,
-                    badgeCount = item.app
-                        ?.let { app -> notifications.countFor(app.packageName) }
-                        ?: 0,
+                    // A folder shows the sum of what is inside it. Counting
+                    // only item.app meant a folder never showed a badge, so
+                    // every notification behind one was invisible — the exact
+                    // problem folders create and a badge exists to solve.
+                    badgeCount = item.unreadCount(notifications::countFor),
                     density = density,
                     widgetHost = widgetHost,
                     cellWidthDp = cellWidthDp,
@@ -536,6 +538,24 @@ private fun HomeCell(
         }
 
         HomeItemType.Folder -> FolderCell(item, density, onClick)
+
+        // A pinned shortcut is drawn with its app's icon and its own label.
+        // The shortcut's real icon would need a LauncherApps query per cell,
+        // which is not a thing to do during layout.
+        HomeItemType.Shortcut -> {
+            val app = item.app
+            if (app == null) {
+                UnavailableCell("捷徑")
+            } else {
+                AppTile(
+                    entry = app.copy(label = item.folderTitle ?: app.label),
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                    iconSize = density.iconSizeDp.dp,
+                    badgeCount = badgeCount,
+                )
+            }
+        }
 
         HomeItemType.Widget -> {
             val id = item.appWidgetId

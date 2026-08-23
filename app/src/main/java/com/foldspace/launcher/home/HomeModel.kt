@@ -124,6 +124,13 @@ enum class HomeItemType(val key: String) {
     App("app"),
     Folder("folder"),
     Widget("widget"),
+
+    /**
+     * A shortcut an app asked to pin — "New message", a saved conversation, a
+     * web page. Distinct from [App] because launching it goes through
+     * `LauncherApps.startShortcut`, not through a launch intent.
+     */
+    Shortcut("shortcut"),
     ;
 
     companion object {
@@ -152,6 +159,10 @@ data class HomeItem(
     val folderTitle: String?,
     val folderContents: List<HomeItem> = emptyList(),
     val appWidgetId: Int? = null,
+    /** Set for [HomeItemType.Shortcut]; the id the publishing app gave it. */
+    val shortcutId: String? = null,
+    /** The package a shortcut belongs to, kept even when [app] resolves. */
+    val shortcutPackage: String? = null,
     /** True for an app item whose package could not be resolved right now. */
     val unavailable: Boolean = false,
 ) {
@@ -159,6 +170,7 @@ data class HomeItem(
         get() = when (type) {
             HomeItemType.App -> app?.label.orEmpty()
             HomeItemType.Folder -> folderTitle.orEmpty()
+            HomeItemType.Shortcut -> folderTitle.orEmpty()
             HomeItemType.Widget -> ""
         }
 
@@ -172,6 +184,19 @@ data class HomeItem(
     fun covers(x: Int, y: Int): Boolean =
         x in cellX until cellX + spanX.coerceAtLeast(1) &&
             y in cellY until cellY + spanY.coerceAtLeast(1)
+
+    /**
+     * Unread notifications this cell stands for.
+     *
+     * A folder answers for everything inside it. Without that, putting an app
+     * into a folder hid its badge — which is the one thing a badge exists to
+     * prevent, and the reason folders need one at all.
+     */
+    fun unreadCount(countFor: (String) -> Int): Int = when (type) {
+        HomeItemType.Folder -> folderContents.sumOf { it.unreadCount(countFor) }
+        HomeItemType.Widget -> 0
+        else -> app?.let { countFor(it.packageName) } ?: 0
+    }
 }
 
 data class HomePage(

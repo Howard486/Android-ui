@@ -51,6 +51,7 @@ fun SettingsScreen(
     onPickIconPack: () -> Unit,
     onExportLayout: () -> Unit,
     onImportLayout: () -> Unit,
+    onRequestCalendarAccess: () -> Unit,
     onSetPowerMode: (PowerMode) -> Unit,
     onSetSwitchMode: (SwitchMode) -> Unit,
     onSetWalletCompatibility: (Boolean) -> Unit,
@@ -198,6 +199,41 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = tokens.accent,
                         modifier = Modifier.clickable(onClick = onImportLayout).padding(vertical = 4.dp),
+                    )
+                }
+            }
+        }
+
+        // §16 — READ_CALENDAR was declared from V0.1 and never requested, so
+        // the calendar condition in the rule editor could never match.
+        item {
+            FoldCard(Modifier.fillMaxWidth()) {
+                Text(
+                    text = "行事曆訊號",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.textPrimary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = if (state.hasCalendarAccess) {
+                        "已授權。FoldSpace 只讀目前時段有沒有行程，以及標題裡的關鍵字，" +
+                            "轉成「會議／專注／交通／忙碌」四種標籤之一；標題本身不會被保存或顯示。"
+                    } else {
+                        "尚未授權。授權後，規則可以用「行事曆」當條件。" +
+                            "FoldSpace 只讀目前時段的忙碌狀態，不讀與會者、地點或內容。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                )
+                if (!state.hasCalendarAccess) {
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        text = "授權行事曆",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = tokens.accent,
+                        modifier = Modifier
+                            .clickable(onClick = onRequestCalendarAccess)
+                            .padding(vertical = 4.dp),
                     )
                 }
             }

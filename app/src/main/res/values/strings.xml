@@ -6,4 +6,8 @@
     <!-- §16 requires every special-access request to state its purpose. -->
     <string name="purpose_notifications">FoldSpace 需要通知存取權，才能把通知依 Space 與重要性重新整理。通知內容只在裝置端處理，不會上傳，通知消失後即刪除。</string>
     <string name="purpose_usage">FoldSpace 需要使用情形存取權，才能讓 Smart Dock 推薦你常用的 App。只保留聚合分數，不保留完整使用紀錄。</string>
+
+    <!-- Pin requests (§5.3). -->
+    <string name="pin_added">已加到桌面</string>
+    <string name="pin_failed">無法加到桌面</string>
 </resources>

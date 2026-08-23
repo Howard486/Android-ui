@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [HomeItemEntity::class, HomePageEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class FoldSpaceDatabase : RoomDatabase() {

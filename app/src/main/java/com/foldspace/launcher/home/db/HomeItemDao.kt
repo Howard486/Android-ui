@@ -83,7 +83,12 @@ abstract class HomeItemDao {
      * Removing an app removes it wherever it sits, on every surface and in both
      * postures — an uninstalled app has no business keeping a cell.
      */
-    @Query("DELETE FROM home_items WHERE itemType = 'app' AND packageName = :packageName")
+    @Query(
+        """
+        DELETE FROM home_items
+        WHERE packageName = :packageName AND itemType IN ('app', 'shortcut')
+        """,
+    )
     abstract suspend fun deleteByPackage(packageName: String)
 
     @Query("DELETE FROM home_items WHERE surfaceKey = :surfaceKey AND postureKey = :postureKey")

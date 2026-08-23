@@ -85,6 +85,27 @@
         </activity>
 
         <!--
+          §5.3 — an app asking to pin a shortcut or a widget. Without these
+          two actions declared, every "Add to home screen" in every app was a
+          no-op: the system had no launcher to route the confirmation to.
+
+          Translucent and with no title: the requesting app has already shown
+          its own prompt, so a second full screen would be pure ceremony.
+        -->
+        <activity
+            android:name=".PinRequestActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.content.pm.action.CONFIRM_PIN_SHORTCUT" />
+                <action android:name="android.content.pm.action.CONFIRM_PIN_APPWIDGET" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!--
           §10 Notification Intelligence. The user must grant Notification
           Listener Access in system settings; until then the service is simply
           never bound and the UI degrades to "no notification data" (§21.1).

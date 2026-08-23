@@ -107,6 +107,16 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    /**
+     * §16 — READ_CALENDAR is a runtime permission and was never requested, so
+     * the declaration bought nothing. Asked for only when the user turns the
+     * calendar signal on, never at launch.
+     */
+    private val calendarPermissionRequest =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            viewModel.refreshPermissions()
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -146,6 +156,7 @@ class MainActivity : ComponentActivity() {
                     onOpenPackage = ::openPackage,
                     onExportLayout = ::exportLayout,
                     onImportLayout = ::importLayout,
+                    onRequestCalendarAccess = ::requestCalendarAccess,
                 )
             }
         }
@@ -218,6 +229,12 @@ class MainActivity : ComponentActivity() {
                         viewModel.onWidgetConfigureResult(request.appWidgetId, request.info, true)
                     }
             }
+        }
+    }
+
+    private fun requestCalendarAccess() {
+        runCatching {
+            calendarPermissionRequest.launch(android.Manifest.permission.READ_CALENDAR)
         }
     }
 

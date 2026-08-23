@@ -138,6 +138,50 @@ class SettingsRepository(
         it[Keys.AppPairs] = AppPairCodec.encodeAll(pairs)
     }
 
+    /**
+     * The settings a backup carries.
+     *
+     * Deliberately a whitelist, not everything: the current Space and the
+     * notification exclusion list are about this device and this moment, and
+     * carrying them to a restore would surprise more than it helps.
+     */
+    fun exportable(current: FoldSpaceSettings): Map<String, Set<String>> = buildMap {
+        put(BackupKeys.RULES, AutomationRuleCodec.encodeAll(current.automationRules))
+        put(BackupKeys.PAIRS, AppPairCodec.encodeAll(current.appPairs))
+        put(BackupKeys.THEME, setOf(current.themeId.key))
+        put(BackupKeys.GRID, setOf(current.gridChoice.key))
+        current.iconPackPackage?.let { put(BackupKeys.ICON_PACK, setOf(it)) }
+        current.pinnedDockApps.forEach { (spaceKey, keys) ->
+            if (keys.isNotEmpty()) put(BackupKeys.PINNED_PREFIX + spaceKey, keys.toSet())
+        }
+    }
+
+    /** Applies what a backup carried. Unknown keys are ignored. */
+    suspend fun importSettings(values: Map<String, Set<String>>) = edit { prefs ->
+        values[BackupKeys.RULES]?.let { prefs[Keys.Rules] = it }
+        values[BackupKeys.PAIRS]?.let { prefs[Keys.AppPairs] = it }
+        values[BackupKeys.THEME]?.firstOrNull()?.let { prefs[Keys.Theme] = it }
+        values[BackupKeys.GRID]?.firstOrNull()?.let { prefs[Keys.Grid] = it }
+        values[BackupKeys.ICON_PACK]?.firstOrNull()?.let { prefs[Keys.IconPack] = it }
+        values.forEach { (key, entries) ->
+            if (!key.startsWith(BackupKeys.PINNED_PREFIX)) return@forEach
+            val spaceKey = key.removePrefix(BackupKeys.PINNED_PREFIX)
+            val space = SpaceId.entries.firstOrNull { it.key == spaceKey } ?: return@forEach
+            // Pins are ordered; the backup stores them as a set, so the order
+            // is whatever the set yields. Saying so beats implying otherwise.
+            prefs[Keys.pinnedFor(space)] = entries.joinToString(RECORD_SEPARATOR)
+        }
+    }
+
+    private object BackupKeys {
+        const val RULES = "rules"
+        const val PAIRS = "pairs"
+        const val THEME = "theme"
+        const val GRID = "grid"
+        const val ICON_PACK = "iconPack"
+        const val PINNED_PREFIX = "pinned:"
+    }
+
     suspend fun setSamsungWalletCompatibility(enabled: Boolean) =
         edit { it[Keys.SamsungWallet] = enabled }
 

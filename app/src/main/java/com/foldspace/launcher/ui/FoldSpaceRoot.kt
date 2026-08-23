@@ -49,6 +49,7 @@ import com.foldspace.launcher.ui.widgets.WidgetPicker
 import com.foldspace.launcher.ui.work.WorkItemsPage
 import com.foldspace.launcher.ui.drawer.AppSearchOverlay
 import com.foldspace.launcher.ui.home.AppLibraryPage
+import com.foldspace.launcher.ui.home.ItemActionSheet
 import com.foldspace.launcher.ui.home.LocalHapticsEnabled
 import com.foldspace.launcher.ui.home.SimpleAppPicker
 import com.foldspace.launcher.ui.icons.IconPackPicker
@@ -93,6 +94,7 @@ fun FoldSpaceRoot(
     onOpenPackage: (String) -> Unit,
     onExportLayout: () -> Unit,
     onImportLayout: () -> Unit,
+    onRequestCalendarAccess: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val drawerOpen by viewModel.drawerOpen.collectAsStateWithLifecycle()
@@ -109,6 +111,7 @@ fun FoldSpaceRoot(
     val sheet by viewModel.sheet.collectAsStateWithLifecycle()
     val iconPack by viewModel.iconPack.collectAsStateWithLifecycle()
     val transientMessage by viewModel.transientMessage.collectAsStateWithLifecycle()
+    val longPressItem by viewModel.longPressItem.collectAsStateWithLifecycle()
 
     val openFolder = remember(openFolderId, homeLayout) {
         openFolderId?.let { id ->
@@ -133,7 +136,7 @@ fun FoldSpaceRoot(
     val bodyPadding = PaddingValues(bottom = systemPadding.calculateBottomPadding())
 
     val anyOverlayOpen = drawerOpen || notificationCenterOpen || settingsOpen ||
-        openFolder != null || widgetPickerOpen || sheet != null
+        openFolder != null || widgetPickerOpen || sheet != null || longPressItem != null
 
     // Back on a launcher means "close whatever is open", never "leave".
     BackHandler(enabled = anyOverlayOpen || editing) {
@@ -143,6 +146,7 @@ fun FoldSpaceRoot(
         viewModel.closeFolder()
         viewModel.closeWidgetPicker()
         viewModel.closeSheet()
+        viewModel.dismissLongPress()
         viewModel.setEditing(false)
     }
 
@@ -287,6 +291,31 @@ fun FoldSpaceRoot(
             )
         }
 
+        longPressItem?.let { item ->
+            val pinnedKeys = state.settings.pinnedDockApps[state.space.key].orEmpty()
+            ItemActionSheet(
+                item = item,
+                shortcuts = remember(item.id) { viewModel.shortcutsFor(item) },
+                shortcutsAvailable = remember(item.id) { viewModel.shortcutsAvailable() },
+                isPinned = item.app?.key in pinnedKeys,
+                onLaunchShortcut = viewModel::launchShortcut,
+                onOpenAppInfo = {
+                    viewModel.dismissLongPress()
+                    item.app?.let(viewModel::openAppInfo)
+                },
+                onTogglePin = {
+                    viewModel.dismissLongPress()
+                    item.app?.let(viewModel::togglePin)
+                },
+                onRemove = {
+                    viewModel.dismissLongPress()
+                    viewModel.removeItem(item)
+                },
+                onDismiss = viewModel::dismissLongPress,
+                contentPadding = systemPadding,
+            )
+        }
+
         Overlay(visible = sheet == LauncherViewModel.Sheet.Rules) {
             RuleEditor(
                 rules = state.settings.automationRules,
@@ -378,6 +407,7 @@ fun FoldSpaceRoot(
                 onRequestDefaultHome = onRequestDefaultHome,
                 onRequestNotificationAccess = onOpenNotificationSettings,
                 onRequestUsageAccess = onOpenUsageSettings,
+                onRequestCalendarAccess = onRequestCalendarAccess,
                 onOrganiseApps = {
                     viewModel.setSettingsOpen(false)
                     viewModel.organiseApps()

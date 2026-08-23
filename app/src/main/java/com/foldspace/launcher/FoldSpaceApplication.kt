@@ -3,6 +3,8 @@ package com.foldspace.launcher
 import android.app.Application
 import android.content.Context
 import com.foldspace.launcher.ai.NanoAdapter
+import com.foldspace.launcher.ai.PromptNanoAdapter
+import com.foldspace.launcher.ai.TextInference
 import com.foldspace.launcher.context.ContextEngine
 import com.foldspace.launcher.context.RuleEngine
 import com.foldspace.launcher.core.launcher.HomeRoleManager
@@ -12,7 +14,12 @@ import com.foldspace.launcher.feed.GoogleNewsRssProvider
 import com.foldspace.launcher.feed.GoogleOverlayFeedProvider
 import com.foldspace.launcher.home.AppCategorizer
 import com.foldspace.launcher.home.HomeLayoutRepository
+import com.foldspace.launcher.core.shortcuts.ShortcutRepository
+import com.foldspace.launcher.home.GridSpec
+import com.foldspace.launcher.home.HomeSurface
+import com.foldspace.launcher.home.Posture
 import com.foldspace.launcher.home.db.FoldSpaceDatabase
+import com.foldspace.launcher.settings.GridChoice
 import com.foldspace.launcher.pairs.SplitLauncher
 import com.foldspace.launcher.ui.icons.IconPackRepository
 import com.foldspace.launcher.widgets.WidgetHostController
@@ -77,10 +84,17 @@ class AppContainer(context: Context) {
     )
 
     /**
-     * §8 — V0.1 ships with no on-device model behind this. Swapping in the ML
-     * Kit GenAI implementation (V0.5, §20.2) is a one-line change here.
+     * §8 — the whole Nano pipeline, with no model behind it.
+     *
+     * Everything above the model is real: prompt construction, strict
+     * parsing, the label whitelist, the confidence floor, batching, and the
+     * refusal to let a model nominate 簡易. Only [TextInference] is a stub,
+     * and swapping in AICore or ML Kit GenAI is a change to this one line.
+     *
+     * Keeping the stub means every caller exercises its fallback in day-one
+     * testing rather than the first time it meets an unsupported device.
      */
-    val nano: NanoAdapter = NanoAdapter.Unsupported
+    val nano: NanoAdapter = PromptNanoAdapter(TextInference.None)
 
     /**
      * Held rather than inlined so the ViewModel can keep its rules in step
@@ -100,6 +114,28 @@ class AppContainer(context: Context) {
 
     /** §4 — two apps side by side, as far as the platform permits. */
     val splitLauncher = SplitLauncher(context, launcherApps)
+
+    /** §5.3 — the shortcuts an app publishes, and pin requests it makes. */
+    val shortcuts = ShortcutRepository(context)
+
+    private val appResources = context.resources
+
+    /**
+     * Cell size in dp, worked out from the screen rather than measured.
+     *
+     * [com.foldspace.launcher.PinRequestActivity] needs a widget's default
+     * span but never draws a grid, so it has nothing to measure. This is the
+     * same arithmetic the grid does, one step earlier.
+     */
+    fun cellSizeDp(posture: Posture, choice: GridChoice): Pair<Int, Int> {
+        val grid = GridSpec.of(HomeSurface.Desktop, posture, choice)
+        val metrics = appResources.displayMetrics
+        val density = metrics.density.takeIf { it > 0f } ?: 1f
+        val widthDp = (metrics.widthPixels / density).toInt()
+        val heightDp = (metrics.heightPixels / density).toInt()
+        return (widthDp / grid.columns).coerceAtLeast(1) to
+            (heightDp / grid.rows).coerceAtLeast(1)
+    }
 }
 
 /** Convenience accessor; every call site already holds a Context. */
