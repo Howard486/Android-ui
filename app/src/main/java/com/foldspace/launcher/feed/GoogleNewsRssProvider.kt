@@ -4,8 +4,11 @@ import android.util.Xml
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
+import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.UnknownHostException
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -30,40 +33,89 @@ class GoogleNewsRssProvider(
     /** No cheap way to know the network is usable; the load reports failure. */
     override fun isAvailable(): Boolean = true
 
+    /**
+     * Tries the localised edition, then the bare feed.
+     *
+     * Every failure is described rather than collapsed into "try again later":
+     * the first version of this page said exactly that for a missing INTERNET
+     * permission, and a message that fits every cause points at none of them.
+     */
     override suspend fun load(): FeedState = withContext(Dispatchers.IO) {
-        val result = runCatching { fetch(feedUrl()) }
-        val items = result.getOrNull()
-        when {
-            items == null -> FeedState.Unavailable("目前無法取得新聞，稍後再試。")
-            items.isEmpty() -> FeedState.Unavailable("新聞來源沒有回傳內容。")
-            else -> FeedState.Ready(items, name)
+        var lastFailure: String? = null
+
+        for (url in candidateUrls()) {
+            val attempt = runCatching { fetch(url) }
+            val items = attempt.getOrNull()
+            when {
+                items == null -> lastFailure = describe(attempt.exceptionOrNull())
+                items.isEmpty() -> lastFailure = "來源沒有回傳任何項目。"
+                else -> return@withContext FeedState.Ready(items, name)
+            }
         }
+
+        FeedState.Unavailable(lastFailure ?: "目前無法取得新聞。")
     }
 
-    private fun feedUrl(): String {
-        // Google News wants a language, a country and a combined ceid. Falling
-        // back to the Taiwan edition matches this build's audience rather than
-        // silently serving US headlines.
+    /**
+     * Editions first, bare feed last.
+     *
+     * Google News keys a Chinese edition on a script-qualified tag —
+     * `ceid=TW:zh-Hant`, not `TW:zh`. The unqualified form is what this built
+     * before, and it does not resolve to an edition, so nothing came back.
+     */
+    internal fun candidateUrls(): List<String> {
         val language = locale.language.ifBlank { "zh" }
-        val country = locale.country.ifBlank { "TW" }
-        val ceid = "$country:$language"
-        return "https://news.google.com/rss?hl=$language-$country&gl=$country&ceid=$ceid"
+        val country = locale.country.ifBlank { "TW" }.uppercase(Locale.US)
+        val edition = editionTag(language, country)
+        return listOf(
+            "https://news.google.com/rss?hl=$language-$country&gl=$country&ceid=$country:$edition",
+            // No edition at all still returns headlines, which beats a blank
+            // page when the locale is one Google does not publish for.
+            "https://news.google.com/rss",
+        )
     }
+
+    /** The `ceid` language half: Chinese needs its script, others do not. */
+    private fun editionTag(language: String, country: String): String =
+        if (!language.equals("zh", ignoreCase = true)) {
+            language
+        } else {
+            when (country) {
+                "TW", "HK", "MO" -> "zh-Hant"
+                else -> "zh-Hans"
+            }
+        }
 
     private fun fetch(url: String): List<FeedItem> {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = TIMEOUT_MS
             readTimeout = TIMEOUT_MS
             requestMethod = "GET"
+            instanceFollowRedirects = true
             setRequestProperty("User-Agent", USER_AGENT)
+            setRequestProperty("Accept", "application/rss+xml, application/xml, text/xml")
         }
 
         return try {
-            if (connection.responseCode !in 200..299) return emptyList()
+            val code = connection.responseCode
+            // Thrown rather than returned empty: the caller has to be able to
+            // tell "the server said no" from "the server had nothing".
+            if (code !in 200..299) throw IOException("HTTP $code")
             connection.inputStream.use(::parse)
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun describe(error: Throwable?): String = when (error) {
+        null -> "目前無法取得新聞。"
+        // The one failure a user cannot do anything about, and the one this
+        // build actually hit.
+        is SecurityException -> "應用程式沒有網路權限，無法取得新聞。"
+        is UnknownHostException -> "連不到 news.google.com，請確認網路連線。"
+        is SocketTimeoutException -> "連線逾時，稍後再試。"
+        is IOException -> error.message?.let { "連線失敗（$it）" } ?: "連線失敗。"
+        else -> error.message?.let { "無法取得新聞（$it）" } ?: "無法取得新聞。"
     }
 
     private fun parse(input: java.io.InputStream): List<FeedItem> {

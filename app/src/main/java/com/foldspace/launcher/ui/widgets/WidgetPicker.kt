@@ -1,6 +1,11 @@
 package com.foldspace.launcher.ui.widgets
 
 import android.appwidget.AppWidgetProviderInfo
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -12,16 +17,23 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.foldspace.launcher.ui.components.FoldCard
@@ -127,11 +139,35 @@ fun WidgetPicker(
                             ?.takeIf { it.isNotBlank() }
                             ?: info.provider.shortClassName
                     }
+                    // A provider's own preview, falling back to its icon. A
+                    // list of names alone was unreadable: nobody picks a widget
+                    // by its class name, they pick it by what it looks like.
+                    val preview = remember(info) {
+                        val drawable = runCatching { info.loadPreviewImage(context, 0) }.getOrNull()
+                            ?: runCatching { info.loadIcon(context, 0) }.getOrNull()
+                        drawable?.toImageBitmapOrNull(PREVIEW_MAX_PX)
+                    }
+                    val density = LocalDensity.current
+
                     FoldCard(
                         Modifier
                             .fillMaxWidth()
                             .clickable { onPick(info) },
                     ) {
+                        if (preview != null) {
+                            Image(
+                                bitmap = preview,
+                                contentDescription = label,
+                                contentScale = ContentScale.Fit,
+                                alignment = Alignment.CenterStart,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 120.dp)
+                                    .clip(RoundedCornerShape(10.dp)),
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
+
                         Text(
                             text = label,
                             style = MaterialTheme.typography.titleSmall,
@@ -141,10 +177,14 @@ fun WidgetPicker(
                         )
                         // Widgets have a minimum size and the grid has fixed
                         // cells, so saying how much room one needs up front
-                        // avoids adding one and finding it does not fit.
+                        // avoids adding one and finding it does not fit. The
+                        // provider reports pixels; dp is what the grid is in.
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "最小 ${info.minWidth} × ${info.minHeight} px",
+                            text = with(density) {
+                                "最小 ${info.minWidth.toDp().value.toInt()} × " +
+                                    "${info.minHeight.toDp().value.toInt()} dp"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = tokens.textMuted,
                         )
@@ -154,3 +194,29 @@ fun WidgetPicker(
         }
     }
 }
+
+/**
+ * A provider's preview drawable as something Compose can draw.
+ *
+ * Bounded on the long edge: a preview is authored at whatever size its app
+ * chose, and some ship full-screen artwork that would be a waste to decode at
+ * source size for a row 120dp tall.
+ */
+private fun Drawable.toImageBitmapOrNull(maxPx: Int): ImageBitmap? = runCatching {
+    // A bitmap-backed drawable can be handed over as it is.
+    (this as? BitmapDrawable)?.bitmap?.let { return@runCatching it.asImageBitmap() }
+
+    val sourceWidth = intrinsicWidth.takeIf { it > 0 } ?: maxPx
+    val sourceHeight = intrinsicHeight.takeIf { it > 0 } ?: maxPx
+    val scale = minOf(1f, maxPx.toFloat() / maxOf(sourceWidth, sourceHeight))
+    val width = (sourceWidth * scale).toInt().coerceAtLeast(1)
+    val height = (sourceHeight * scale).toInt().coerceAtLeast(1)
+
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    setBounds(0, 0, width, height)
+    draw(Canvas(bitmap))
+    bitmap.asImageBitmap()
+}.getOrNull()
+
+/** Long-edge cap for a decoded preview. */
+private const val PREVIEW_MAX_PX = 640

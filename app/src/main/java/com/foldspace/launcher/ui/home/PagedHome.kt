@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -86,6 +85,9 @@ fun PagedHome(
     onMove: (item: HomeItem, page: Int, cellX: Int, cellY: Int) -> Unit,
     onDropOnto: (moving: HomeItem, target: HomeItem) -> Unit,
     onLongPressEmpty: (page: Int, cellX: Int, cellY: Int) -> Unit,
+    onResizeWidget: (item: HomeItem, spanX: Int, spanY: Int) -> Unit,
+    onRemoveItem: (HomeItem) -> Unit,
+    onCellMeasured: (widthDp: Int, heightDp: Int) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     feedContent: (@Composable () -> Unit)? = null,
@@ -141,13 +143,15 @@ fun PagedHome(
                         editing = editing,
                         drag = drag,
                         pageIndex = page.index,
-                        pagerIndex = pagerIndex,
                         pagerState = pagerState,
                         leadingCount = leadingCount,
                         onLaunch = onLaunch,
                         onLongPress = onLongPress,
                         onOpenFolder = onOpenFolder,
                         onLongPressEmpty = onLongPressEmpty,
+                        onResizeWidget = onResizeWidget,
+                        onRemoveItem = onRemoveItem,
+                        onCellMeasured = onCellMeasured,
                         onDragUpdate = { drag = it },
                         onDragEnd = {
                             val current = drag
@@ -197,9 +201,8 @@ fun PagedHome(
 /**
  * Fixed grid: every cell is the same size and items sit where they were put.
  *
- * Built as nested rows rather than a lazy grid because the page is bounded and
- * fully visible — laziness would buy nothing and would break absolute cell
- * addressing, which is the whole point of a placed layout.
+ * Laid out by [CellGridLayout] rather than by nested rows because rows cannot
+ * span, and a widget that claims four cells has to be drawn across four cells.
  */
 @Composable
 private fun CellGrid(
@@ -211,20 +214,37 @@ private fun CellGrid(
     editing: Boolean,
     drag: DragState?,
     pageIndex: Int,
-    pagerIndex: Int,
     pagerState: PagerState,
     leadingCount: Int,
     onLaunch: (HomeItem) -> Unit,
     onLongPress: (HomeItem) -> Unit,
     onOpenFolder: (HomeItem) -> Unit,
     onLongPressEmpty: (page: Int, cellX: Int, cellY: Int) -> Unit,
+    onResizeWidget: (item: HomeItem, spanX: Int, spanY: Int) -> Unit,
+    onRemoveItem: (HomeItem) -> Unit,
+    onCellMeasured: (widthDp: Int, heightDp: Int) -> Unit,
     onDragUpdate: (DragState?) -> Unit,
     onDragEnd: () -> Unit,
 ) {
-    val byCell = remember(page) { page.items.associateBy { it.cellX to it.cellY } }
     var gridSize by remember { mutableStateOf(IntSize.Zero) }
     val localDensity = LocalDensity.current
     val activeDrag = drag?.takeIf { it.targetPage == pageIndex }
+
+    // The span a handle is currently being dragged to, so the widget resizes
+    // under the finger instead of jumping when the drag ends.
+    var pendingResize by remember(page.index) { mutableStateOf<Pair<Long, Pair<Int, Int>>?>(null) }
+
+    // Clear the preview once the stored layout has caught up with it, rather
+    // than on drag end — dropping it any earlier flashes the old size back for
+    // the round trip through the database.
+    LaunchedEffect(page.items, pendingResize) {
+        val (id, span) = pendingResize ?: return@LaunchedEffect
+        val current = page.items.firstOrNull { it.id == id }
+        if (current == null || current.spanX to current.spanY == span) pendingResize = null
+    }
+
+    fun spanOf(item: HomeItem): Pair<Int, Int> =
+        pendingResize?.takeIf { it.first == item.id }?.second ?: (item.spanX to item.spanY)
 
     /** Pager positions include the leading page; stored page indices do not. */
     fun gridPageAt(pagerPosition: Int) = pagerPosition - leadingCount
@@ -246,122 +266,131 @@ private fun CellGrid(
         pagerState.animateScrollToPage(next)
     }
 
-    val dragModifier = Modifier.pointerInput(page.index, layout.grid, editing) {
-            var position = Offset.Zero
+    val dragModifier = Modifier.pointerInput(page, layout.grid, editing) {
+        var position = Offset.Zero
 
-            fun cellAt(offset: Offset): Pair<Int, Int>? {
-                if (size.width == 0 || size.height == 0) return null
-                val x = (offset.x / (size.width.toFloat() / layout.grid.columns)).toInt()
-                val y = (offset.y / (size.height.toFloat() / layout.grid.rows)).toInt()
-                return if (layout.grid.contains(x, y)) x to y else null
-            }
+        fun cellAt(offset: Offset): Pair<Int, Int>? {
+            if (size.width == 0 || size.height == 0) return null
+            val x = (offset.x / (size.width.toFloat() / layout.grid.columns)).toInt()
+            val y = (offset.y / (size.height.toFloat() / layout.grid.rows)).toInt()
+            return if (layout.grid.contains(x, y)) x to y else null
+        }
 
-            detectDragGesturesAfterLongPress(
-                onDragStart = { offset ->
-                    position = offset
-                    val cell = cellAt(offset)
-                    val item = cell?.let(byCell::get)
-                    when {
-                        // Long-pressing an icon picks it up. Doing so outside
-                        // edit mode is what people expect, so it enters edit
-                        // mode rather than refusing.
-                        item != null -> onDragUpdate(DragState(item, offset, pageIndex, cell, null))
+        detectDragGesturesAfterLongPress(
+            onDragStart = { offset ->
+                position = offset
+                val cell = cellAt(offset)
+                // A span-aware lookup: pressing anywhere under a widget finds
+                // the widget, not just its top-left cell.
+                val item = cell?.let { (x, y) -> page.occupantAt(x, y) }
+                when {
+                    // Long-pressing an icon picks it up. Doing so outside
+                    // edit mode is what people expect, so it enters edit
+                    // mode rather than refusing.
+                    item != null -> onDragUpdate(DragState(item, offset, pageIndex, cell, null))
 
-                        // Long-pressing blank space is the only discoverable
-                        // way to add a widget.
-                        cell != null -> onLongPressEmpty(pageIndex, cell.first, cell.second)
-                    }
-                },
-                onDrag = { change, amount ->
-                    change.consume()
-                    position += amount
-                    val current = drag ?: return@detectDragGesturesAfterLongPress
-                    val cell = cellAt(position)
-                    onDragUpdate(
-                        current.copy(
-                            pointer = position,
-                            targetPage = gridPageAt(pagerState.currentPage)
-                                .coerceAtLeast(0),
-                            targetCell = cell,
-                            targetItem = cell?.let(byCell::get)
-                                ?.takeIf { it.id != current.item.id },
-                        ),
-                    )
-                },
-                onDragEnd = onDragEnd,
-                onDragCancel = onDragEnd,
-            )
+                    // Long-pressing blank space is the only discoverable
+                    // way to add a widget.
+                    cell != null -> onLongPressEmpty(pageIndex, cell.first, cell.second)
+                }
+            },
+            onDrag = { change, amount ->
+                change.consume()
+                position += amount
+                val current = drag ?: return@detectDragGesturesAfterLongPress
+                val cell = cellAt(position)
+                onDragUpdate(
+                    current.copy(
+                        pointer = position,
+                        targetPage = gridPageAt(pagerState.currentPage).coerceAtLeast(0),
+                        targetCell = cell,
+                        targetItem = cell
+                            ?.let { (x, y) -> page.occupantAt(x, y) }
+                            ?.takeIf { it.id != current.item.id },
+                    ),
+                )
+            },
+            onDragEnd = onDragEnd,
+            onDragCancel = onDragEnd,
+        )
     }
 
-    Column(
-        Modifier
+    val cellWidthPx =
+        if (gridSize.width == 0) 0f else gridSize.width.toFloat() / layout.grid.columns
+    val cellHeightPx =
+        if (gridSize.height == 0) 0f else gridSize.height.toFloat() / layout.grid.rows
+    val cellWidthDp = with(localDensity) { cellWidthPx.toDp().value.toInt() }
+    val cellHeightDp = with(localDensity) { cellHeightPx.toDp().value.toInt() }
+
+    // The picker needs the real cell size to work out a new widget's span; it
+    // used to assume 72x88dp, which was wrong on both screens.
+    LaunchedEffect(cellWidthDp, cellHeightDp) {
+        if (cellWidthDp > 0 && cellHeightDp > 0) onCellMeasured(cellWidthDp, cellHeightDp)
+    }
+
+    CellGridLayout(
+        grid = layout.grid,
+        modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 12.dp)
             .onSizeChanged { gridSize = it }
             .then(dragModifier),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        val cellWidthDp = if (gridSize.width == 0) 0 else with(localDensity) {
-            (gridSize.width / layout.grid.columns).toDp().value.toInt()
-        }
-        val cellHeightDp = if (gridSize.height == 0) 0 else with(localDensity) {
-            (gridSize.height / layout.grid.rows).toDp().value.toInt()
-        }
-
-        repeat(layout.grid.rows) { y ->
-            Row(
+        activeDrag?.targetCell?.let { (x, y) ->
+            Box(
                 Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                repeat(layout.grid.columns) { x ->
-                    val item = byCell[x to y]
-                    val isDropTarget = activeDrag?.targetCell == (x to y)
-                    val isBeingDragged = activeDrag != null && activeDrag.item.id == item?.id
+                    .gridCell(x, y)
+                    .padding(2.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(1.dp, FoldSpaceTheme.tokens.accent, RoundedCornerShape(16.dp)),
+            )
+        }
 
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .then(
-                                if (isDropTarget) {
-                                    Modifier
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .border(
-                                            1.dp,
-                                            FoldSpaceTheme.tokens.accent,
-                                            RoundedCornerShape(16.dp),
-                                        )
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (item != null) {
-                            Box(Modifier.alpha(if (isBeingDragged) 0.25f else 1f)) {
-                                HomeCell(
-                                    item = item,
-                                    badgeCount = item.app
-                                        ?.let { app -> notifications.countFor(app.packageName) }
-                                        ?: 0,
-                                    density = density,
-                                    widgetHost = widgetHost,
-                                    cellWidthDp = cellWidthDp,
-                                    cellHeightDp = cellHeightDp,
-                                    onClick = {
-                                        if (item.type == HomeItemType.Folder) {
-                                            onOpenFolder(item)
-                                        } else {
-                                            onLaunch(item)
-                                        }
-                                    },
-                                    onLongClick = { onLongPress(item) },
-                                )
+        page.items.forEach { item ->
+            val (spanX, spanY) = spanOf(item)
+            val isBeingDragged = activeDrag?.item?.id == item.id
+
+            Box(
+                Modifier
+                    .gridCell(item.cellX, item.cellY, spanX, spanY)
+                    .padding(2.dp)
+                    .alpha(if (isBeingDragged) 0.25f else 1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                HomeCell(
+                    item = item,
+                    badgeCount = item.app
+                        ?.let { app -> notifications.countFor(app.packageName) }
+                        ?: 0,
+                    density = density,
+                    widgetHost = widgetHost,
+                    cellWidthDp = cellWidthDp,
+                    cellHeightDp = cellHeightDp,
+                    spanX = spanX,
+                    spanY = spanY,
+                    onClick = {
+                        if (item.type == HomeItemType.Folder) onOpenFolder(item) else onLaunch(item)
+                    },
+                    onLongClick = { onLongPress(item) },
+                )
+
+                if (editing && item.type == HomeItemType.Widget) {
+                    WidgetEditFrame(
+                        spanX = spanX,
+                        spanY = spanY,
+                        cellWidthPx = cellWidthPx,
+                        cellHeightPx = cellHeightPx,
+                        onProposeSpan = { wantX, wantY ->
+                            if (layout.spanFits(page.index, item, wantX, wantY)) {
+                                pendingResize = item.id to (wantX to wantY)
                             }
-                        }
-                    }
+                        },
+                        onCommitSpan = {
+                            val (x, y) = spanOf(item)
+                            if (x != item.spanX || y != item.spanY) onResizeWidget(item, x, y)
+                        },
+                        onRemove = { onRemoveItem(item) },
+                    )
                 }
             }
         }
@@ -397,6 +426,8 @@ private fun HomeCell(
     widgetHost: WidgetHostController?,
     cellWidthDp: Int,
     cellHeightDp: Int,
+    spanX: Int,
+    spanY: Int,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -426,11 +457,14 @@ private fun HomeCell(
             if (widgetHost == null || id == null) {
                 UnavailableCell("工具")
             } else {
+                // The span in use, not the stored one: while a resize handle is
+                // being dragged these differ, and the host has to be told the
+                // box it is actually being drawn into.
                 WidgetCell(
                     controller = widgetHost,
                     appWidgetId = id,
-                    widthDp = cellWidthDp * item.spanX,
-                    heightDp = cellHeightDp * item.spanY,
+                    widthDp = cellWidthDp * spanX,
+                    heightDp = cellHeightDp * spanY,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

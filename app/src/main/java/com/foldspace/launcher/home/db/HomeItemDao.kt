@@ -236,6 +236,13 @@ abstract class HomeItemDao {
     abstract suspend fun renameFolder(folderId: Long, title: String)
 
     /**
+     * Resizing touches only the span: the anchor cell stays put, so the unique
+     * index is untouched and no parking dance is needed.
+     */
+    @Query("UPDATE home_items SET spanX = :spanX, spanY = :spanY WHERE id = :id")
+    abstract suspend fun setSpan(id: Long, spanX: Int, spanY: Int)
+
+    /**
      * Positions a folder member. Members live off-page, and their slot number
      * is stored in cellX so that the unique index — which includes `container`
      * — still distinguishes them from each other.

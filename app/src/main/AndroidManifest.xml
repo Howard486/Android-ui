@@ -6,6 +6,12 @@
          a system broadcast, or a special access the user grants explicitly in
          Settings; none of it is silent. -->
 
+    <!-- The leftmost news page fetches an RSS feed. Without this every fetch
+         throws SecurityException, which the feed caught and reported as a
+         generic "try again later" — the page was never going to fill. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- Usage context (§7). Special access: granted via Settings > Usage access. -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"

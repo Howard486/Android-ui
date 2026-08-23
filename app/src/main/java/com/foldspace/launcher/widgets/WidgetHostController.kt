@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.SizeF
+import kotlin.math.ceil
 
 /**
  * §13 — hosting third-party App Widgets.
@@ -113,13 +114,20 @@ class WidgetHostController(private val context: Context) {
         }
     }
 
-    /** How many grid cells a provider wants, given the cell size in dp. */
+    /**
+     * How many grid cells a provider wants, given the cell size in dp.
+     *
+     * `minWidth`/`minHeight` arrive already resolved to pixels, so they are
+     * converted back before being compared with a dp cell. Rounded up, not up
+     * by one: a widget asking for exactly two cells' worth used to be given
+     * three.
+     */
     fun defaultSpan(info: AppWidgetProviderInfo, cellWidthDp: Int, cellHeightDp: Int): Pair<Int, Int> {
-        val width = info.minWidth.coerceAtLeast(1)
-        val height = info.minHeight.coerceAtLeast(1)
         val density = context.resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
-        val spanX = ((width / density) / cellWidthDp.coerceAtLeast(1)).toInt() + 1
-        val spanY = ((height / density) / cellHeightDp.coerceAtLeast(1)).toInt() + 1
+        val widthDp = info.minWidth.coerceAtLeast(1) / density
+        val heightDp = info.minHeight.coerceAtLeast(1) / density
+        val spanX = ceil(widthDp / cellWidthDp.coerceAtLeast(1)).toInt()
+        val spanY = ceil(heightDp / cellHeightDp.coerceAtLeast(1)).toInt()
         return spanX.coerceAtLeast(1) to spanY.coerceAtLeast(1)
     }
 

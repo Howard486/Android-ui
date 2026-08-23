@@ -196,6 +196,10 @@ class HomeLayoutRepository(
         )
     }
 
+    /** §13 — the user pulling a widget's edge to a new number of cells. */
+    suspend fun resizeItem(itemId: Long, spanX: Int, spanY: Int) =
+        dao.setSpan(itemId, spanX.coerceAtLeast(1), spanY.coerceAtLeast(1))
+
     suspend fun removeItem(itemId: Long) = dao.deleteById(itemId)
 
     suspend fun addPage(space: SpaceId, posture: Posture, kind: PageKind) {
@@ -339,11 +343,24 @@ class HomeLayoutRepository(
         return true
     }
 
-    /** First index not already occupied, scanning pages in reading order. */
+    /**
+     * First index not already occupied, scanning pages in reading order.
+     *
+     * Spans count: a widget holding four cells makes all four unavailable, or
+     * the next installed app is placed underneath it.
+     */
     private fun nextFreeSlot(existing: List<HomeItemEntity>, grid: GridSpec): Int {
-        val taken = existing
+        val taken = mutableSetOf<Int>()
+        existing
             .filter { it.container == HomeItemEntity.CONTAINER_DESKTOP }
-            .mapTo(mutableSetOf()) { it.pageIndex * grid.cellsPerPage + it.cellY * grid.columns + it.cellX }
+            .forEach { row ->
+                for (y in row.cellY until row.cellY + row.spanY.coerceAtLeast(1)) {
+                    for (x in row.cellX until row.cellX + row.spanX.coerceAtLeast(1)) {
+                        if (!grid.contains(x, y)) continue
+                        taken += row.pageIndex * grid.cellsPerPage + y * grid.columns + x
+                    }
+                }
+            }
         var slot = 0
         while (slot in taken) slot++
         return slot

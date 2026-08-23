@@ -125,13 +125,27 @@ data class HomeItem(
             HomeItemType.Folder -> folderTitle.orEmpty()
             HomeItemType.Widget -> ""
         }
+
+    /**
+     * True when this item's span reaches the given cell.
+     *
+     * An item was previously treated as owning only its anchor cell, so a 4x2
+     * widget left seven cells looking free — apps were placed underneath it and
+     * the widget itself was drawn squashed into one square.
+     */
+    fun covers(x: Int, y: Int): Boolean =
+        x in cellX until cellX + spanX.coerceAtLeast(1) &&
+            y in cellY until cellY + spanY.coerceAtLeast(1)
 }
 
 data class HomePage(
     val index: Int,
     val items: List<HomeItem>,
     val kind: PageKind = PageKind.Grid,
-)
+) {
+    /** Whatever holds this cell, whether or not the cell is its anchor. */
+    fun occupantAt(x: Int, y: Int): HomeItem? = items.firstOrNull { it.covers(x, y) }
+}
 
 /** The whole arrangement for one Space in one posture. */
 data class HomeLayout(
@@ -157,16 +171,69 @@ data class HomeLayout(
 
     /** First free cell on the given page, or null when the page is full. */
     fun firstFreeCell(pageIndex: Int): Pair<Int, Int>? {
-        val taken = pages.firstOrNull { it.index == pageIndex }
-            ?.items
-            ?.mapTo(mutableSetOf()) { it.cellX to it.cellY }
-            .orEmpty()
+        val page = pages.firstOrNull { it.index == pageIndex }
         for (y in 0 until grid.rows) {
             for (x in 0 until grid.columns) {
-                if ((x to y) !in taken) return x to y
+                if (page?.occupantAt(x, y) == null) return x to y
             }
         }
         return null
+    }
+
+    /**
+     * Whether [item] could occupy the given span from where it sits.
+     *
+     * The item itself is excluded, so a widget shrinking always fits; anything
+     * else in the way, or the edge of the grid, stops it.
+     */
+    fun spanFits(pageIndex: Int, item: HomeItem, spanX: Int, spanY: Int): Boolean {
+        if (spanX < 1 || spanY < 1) return false
+        if (item.cellX + spanX > grid.columns) return false
+        if (item.cellY + spanY > grid.rows) return false
+
+        val others = pages.firstOrNull { it.index == pageIndex }
+            ?.items
+            ?.filter { it.id != item.id }
+            .orEmpty()
+
+        for (y in item.cellY until item.cellY + spanY) {
+            for (x in item.cellX until item.cellX + spanX) {
+                if (others.any { it.covers(x, y) }) return false
+            }
+        }
+        return true
+    }
+
+    /**
+     * The largest span at or below the one asked for that actually fits.
+     *
+     * The UI clamps as the handle is dragged, but a commit goes through here
+     * too: a span that only the UI checked would be a span the database is
+     * free to hold in a state the grid cannot draw.
+     *
+     * Searched rather than shrunk one axis at a time: giving way on one axis
+     * can free the other, so any single pass reports a box smaller than the
+     * grid actually allows. A page is at most 8x7, which makes the exhaustive
+     * answer cheaper to justify than a clever one.
+     */
+    fun clampSpan(pageIndex: Int, item: HomeItem, spanX: Int, spanY: Int): Pair<Int, Int> {
+        val wantX = spanX.coerceIn(1, grid.columns)
+        val wantY = spanY.coerceIn(1, grid.rows)
+
+        var bestX = 0
+        var bestY = 0
+        for (y in 1..wantY) {
+            for (x in 1..wantX) {
+                if (!spanFits(pageIndex, item, x, y)) continue
+                if (x * y > bestX * bestY) {
+                    bestX = x
+                    bestY = y
+                }
+            }
+        }
+        // Nothing fit at all, which means something already overlaps this
+        // item's own anchor. One cell is the only honest answer.
+        return if (bestX == 0) 1 to 1 else bestX to bestY
     }
 
     /**

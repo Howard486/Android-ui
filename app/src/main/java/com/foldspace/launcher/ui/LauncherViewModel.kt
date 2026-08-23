@@ -206,6 +206,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private var pendingWidgetCell: Triple<Int, Int, Int>? = null
 
     /**
+     * The measured size of one grid cell, in dp, reported by the grid itself.
+     *
+     * A widget's default span is worked out from this. It used to be assumed
+     * to be 72x88dp, which is right on neither screen of a foldable and left
+     * every added widget the wrong size before the user touched it.
+     */
+    private var measuredCellDp: Pair<Int, Int>? = null
+
+    fun onCellMeasured(widthDp: Int, heightDp: Int) {
+        if (widthDp > 0 && heightDp > 0) measuredCellDp = widthDp to heightDp
+    }
+
+    /**
      * Asks the Activity to run a system dialog. Only an Activity can launch
      * the bind-consent and configure flows, so the ViewModel hands the request
      * over rather than holding an Activity reference.
@@ -509,10 +522,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         viewModelScope.launch {
             val layout = homeLayout.value
+            val (cellWidthDp, cellHeightDp) = measuredCellDp ?: FALLBACK_CELL_DP
             val (spanX, spanY) = container.widgetHost.defaultSpan(
                 info,
-                cellWidthDp = 72,
-                cellHeightDp = 88,
+                cellWidthDp = cellWidthDp,
+                cellHeightDp = cellHeightDp,
             )
             container.homeLayout.addWidget(
                 space = state.value.space,
@@ -526,6 +540,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 spanY = spanY.coerceAtMost(layout.grid.rows),
             )
         }
+    }
+
+    /**
+     * §13 — a widget pulled to a new number of cells.
+     *
+     * Clamped against the layout again here rather than trusting the handle:
+     * the UI checks as it drags, but the database would otherwise be free to
+     * hold a span the grid cannot draw.
+     */
+    fun resizeWidget(item: HomeItem, spanX: Int, spanY: Int) = viewModelScope.launch {
+        val layout = homeLayout.value
+        val page = layout.pages.firstOrNull { p -> p.items.any { it.id == item.id } } ?: return@launch
+        val (x, y) = layout.clampSpan(page.index, item, spanX, spanY)
+        if (x == item.spanX && y == item.spanY) return@launch
+        container.homeLayout.resizeItem(item.id, x, y)
     }
 
     fun removeItem(item: HomeItem) = viewModelScope.launch {
@@ -607,5 +636,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private companion object {
         /** §5.4 — "使用者可固定 2–3 個 App"; four is the hard ceiling. */
         const val MAX_PINNED = 4
+
+        /** Only used before the grid has been measured once. */
+        val FALLBACK_CELL_DP = 72 to 88
     }
 }
