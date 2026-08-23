@@ -81,6 +81,12 @@ dependencies {
     // App lock. BiometricPrompt needs a FragmentActivity, which is why
     // MainActivity extends one.
     implementation(libs.androidx.biometric)
+    // Pinned explicitly, and not decoration: biometric 1.1.0 resolves
+    // fragment 1.2.5, and registerForActivityResult requires 1.3.0 or later —
+    // versions below it failed to call super.onRequestPermissionsResult and
+    // used invalid request codes. lintVitalRelease treats that as fatal, so
+    // without this the release build does not assemble at all.
+    implementation(libs.androidx.fragment)
 
     // Settings / Space persistence — spec §16.1.
     implementation(libs.androidx.datastore.preferences)
