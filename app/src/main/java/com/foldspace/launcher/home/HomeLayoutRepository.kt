@@ -418,10 +418,55 @@ class HomeLayoutRepository(
      * primary key in one and of a unique index in the other, so a direct
      * rewrite would abort partway.
      */
-    suspend fun reorderPages(surface: HomeSurface, posture: Posture, order: List<Int>) {
-        if (PageOrder.changes(order).isEmpty()) return
-        dao.reorderPages(surface.key, posture.key, order)
-        pageDao.reorder(surface.key, posture.key, order)
+    /**
+     * Moves the page stored at [fromIndex] to where [toIndex] currently sits.
+     *
+     * Takes stored indices, not list positions. The overview shows a filtered
+     * list — a page hidden by the current context keeps its stored index while
+     * disappearing from that list — so a position is not an index, and using
+     * one as the other wrote `WHERE pageIndex = ...` against a page that does
+     * not exist. Which is exactly as loud as it sounds: nothing happened.
+     */
+    suspend fun movePage(
+        surface: HomeSurface,
+        posture: Posture,
+        fromIndex: Int,
+        toIndex: Int,
+    ) {
+        applyPageMoves(
+            surface,
+            posture,
+            PageOrder.moveWithin(storedPageIndices(surface, posture), fromIndex, toIndex),
+        )
+    }
+
+    /** Renumbers a contiguous 0..n-1 index space — what a deletion leaves. */
+    private suspend fun reorderPages(surface: HomeSurface, posture: Posture, order: List<Int>) {
+        applyPageMoves(surface, posture, PageOrder.changes(order))
+    }
+
+    private suspend fun applyPageMoves(
+        surface: HomeSurface,
+        posture: Posture,
+        moves: List<Pair<Int, Int>>,
+    ) {
+        if (moves.isEmpty()) return
+        dao.applyPageMoves(surface.key, posture.key, moves)
+        pageDao.applyPageMoves(surface.key, posture.key, moves)
+    }
+
+    /**
+     * Every page index that exists, declared or implied by an item on it.
+     *
+     * Both sources matter: a page with items and no declared row exists, and a
+     * declared page with nothing on it exists too.
+     */
+    private suspend fun storedPageIndices(surface: HomeSurface, posture: Posture): List<Int> {
+        val fromItems = dao.getLayout(surface.key, posture.key)
+            .filter { it.container == HomeItemEntity.CONTAINER_DESKTOP }
+            .map { it.pageIndex }
+        val declared = pageDao.getPages(surface.key, posture.key).map { it.pageIndex }
+        return (fromItems + declared).filter { it >= 0 }.distinct().sorted()
     }
 
     /**

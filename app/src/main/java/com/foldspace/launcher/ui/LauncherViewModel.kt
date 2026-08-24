@@ -30,7 +30,6 @@ import com.foldspace.launcher.ui.icons.IconPackInfo
 import com.foldspace.launcher.ui.icons.IconOverride
 import com.foldspace.launcher.ui.icons.LoadedIconPack
 import com.foldspace.launcher.home.PageKind
-import com.foldspace.launcher.home.PageOrder
 import com.foldspace.launcher.home.Posture
 import com.foldspace.launcher.work.WorkItemsDeriver
 import com.foldspace.launcher.work.WorkItemsState
@@ -1134,13 +1133,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /** Drag-to-reorder in the overview. [from] and [to] are visible positions. */
+    /**
+     * [from] and [to] are positions in the overview, which is a filtered list.
+     * The stored index is read off the page itself before anything reaches the
+     * database — the two are only the same list when no page is hidden and the
+     * indices happen to run without a gap.
+     */
     fun movePage(from: Int, to: Int) = viewModelScope.launch {
         val pages = homeLayout.value.pages
-        if (from !in pages.indices || to !in pages.indices) return@launch
-        container.homeLayout.reorderPages(
+        val fromPage = pages.getOrNull(from) ?: return@launch
+        val toPage = pages.getOrNull(to) ?: return@launch
+        container.homeLayout.movePage(
             surface = HomeSurface.of(state.value.space),
             posture = currentPosture(),
-            order = PageOrder.move(pages.size, from, to),
+            fromIndex = fromPage.index,
+            toIndex = toPage.index,
         )
     }
 

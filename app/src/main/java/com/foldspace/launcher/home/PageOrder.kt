@@ -33,6 +33,30 @@ object PageOrder {
         }
     }
 
+    /**
+     * Moving the page stored at [fromIndex] to where [toIndex] sits, as
+     * `(oldStoredIndex → newStoredIndex)` pairs.
+     *
+     * This exists because the overview counts *positions* and the database
+     * stores *indices*, and those are only the same list when the stored
+     * indices happen to run 0, 1, 2 with no gaps. A page hidden by the current
+     * context is filtered out of the list while keeping its stored index, so
+     * every page after it is off by one — and the reorder then wrote
+     * `WHERE pageIndex = ...` against a page that does not exist, which is
+     * silently nothing at all.
+     *
+     * Working through the real index set keeps the set unchanged and only
+     * reorders what sits in it, so no gap is ever introduced either.
+     */
+    fun moveWithin(indices: List<Int>, fromIndex: Int, toIndex: Int): List<Pair<Int, Int>> {
+        val sorted = indices.distinct().sorted()
+        val from = sorted.indexOf(fromIndex)
+        val to = sorted.indexOf(toIndex)
+        if (from < 0 || to < 0 || from == to) return emptyList()
+        return changes(move(sorted.size, from, to))
+            .map { (oldPosition, newPosition) -> sorted[oldPosition] to sorted[newPosition] }
+    }
+
     /** Drops one page; everything after it shifts down by one. */
     fun removed(count: Int, index: Int): List<Int> {
         if (count <= 0) return emptyList()

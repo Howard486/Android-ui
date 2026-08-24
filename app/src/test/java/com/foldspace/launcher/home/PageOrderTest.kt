@@ -1,6 +1,7 @@
 package com.foldspace.launcher.home
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -68,5 +69,59 @@ class PageOrderTest {
     @Test
     fun `changes is empty for an untouched order`() {
         assertEquals(emptyList<Pair<Int, Int>>(), PageOrder.changes(listOf(0, 1, 2, 3)))
+    }
+
+    @Test
+    fun `moveWithin works in stored indices, not list positions`() {
+        // Pages 0, 2 and 5 exist — 1, 3 and 4 were deleted or are hidden by
+        // the current context. Moving the page stored at 5 to where 2 sits
+        // must renumber those two, and must not touch a page numbered 1.
+        val moves = PageOrder.moveWithin(listOf(0, 2, 5), fromIndex = 5, toIndex = 2)
+        assertEquals(setOf(5 to 2, 2 to 5), moves.toSet())
+        assertTrue(moves.none { it.first == 1 || it.second == 1 })
+    }
+
+    @Test
+    fun `moveWithin never invents an index outside the set it was given`() {
+        val indices = listOf(0, 2, 5, 9)
+        for (from in indices) {
+            for (to in indices) {
+                val moves = PageOrder.moveWithin(indices, from, to)
+                moves.forEach { (old, new) ->
+                    assertTrue("old=$old", old in indices)
+                    assertTrue("new=$new", new in indices)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `moveWithin is a permutation, so no page index is lost or duplicated`() {
+        val indices = listOf(0, 2, 5, 9)
+        val moves = PageOrder.moveWithin(indices, fromIndex = 0, toIndex = 9)
+        // Every index that is vacated is also filled.
+        assertEquals(moves.map { it.first }.sorted(), moves.map { it.second }.sorted())
+    }
+
+    @Test
+    fun `moving a page onto itself changes nothing`() {
+        assertTrue(PageOrder.moveWithin(listOf(0, 2, 5), 2, 2).isEmpty())
+    }
+
+    @Test
+    fun `an index that is not in the set is refused rather than guessed at`() {
+        assertTrue(PageOrder.moveWithin(listOf(0, 2, 5), fromIndex = 3, toIndex = 0).isEmpty())
+        assertTrue(PageOrder.moveWithin(listOf(0, 2, 5), fromIndex = 0, toIndex = 3).isEmpty())
+        assertTrue(PageOrder.moveWithin(emptyList(), 0, 1).isEmpty())
+    }
+
+    @Test
+    fun `a contiguous set behaves exactly like the positional move`() {
+        // The case that always worked, pinned so the new path cannot regress it.
+        val indices = listOf(0, 1, 2, 3)
+        assertEquals(
+            PageOrder.changes(PageOrder.move(4, 3, 1)),
+            PageOrder.moveWithin(indices, fromIndex = 3, toIndex = 1),
+        )
     }
 }

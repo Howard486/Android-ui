@@ -63,10 +63,11 @@ abstract class HomePageDao {
 
     /** Two-phase for the same reason as the items table: the key would collide. */
     @Transaction
-    open suspend fun reorder(surfaceKey: String, postureKey: String, order: List<Int>) {
-        val moves = order.withIndex()
-            .filter { (newIndex, oldIndex) -> newIndex != oldIndex }
-            .map { (newIndex, oldIndex) -> oldIndex to newIndex }
+    open suspend fun applyPageMoves(
+        surfaceKey: String,
+        postureKey: String,
+        moves: List<Pair<Int, Int>>,
+    ) {
         if (moves.isEmpty()) return
 
         moves.forEach { (oldPage, _) ->

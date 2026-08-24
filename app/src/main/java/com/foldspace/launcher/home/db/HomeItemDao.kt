@@ -149,19 +149,25 @@ abstract class HomeItemDao {
     )
 
     /**
-     * Renumbers whole pages, in the order given.
+     * Renumbers whole pages.
      *
-     * `order[newIndex] = oldIndex`. Every page that moves is parked on a
-     * negative scratch index first: `pageIndex` is part of the unique index,
-     * so writing final numbers one page at a time would collide with a page
-     * that has not moved yet and abort the transaction halfway. Same shape as
-     * [repackDesktop], for the same reason.
+     * Takes explicit `(oldIndex → newIndex)` pairs rather than a positional
+     * permutation: the caller is the only place that knows which stored
+     * indices actually exist, and a permutation of positions silently means
+     * the wrong pages whenever those indices are not 0, 1, 2 with no gaps.
+     *
+     * Every page that moves is parked on a negative scratch index first:
+     * `pageIndex` is part of the unique index, so writing final numbers one
+     * page at a time would collide with a page that has not moved yet and
+     * abort the transaction halfway. Same shape as [repackDesktop], for the
+     * same reason.
      */
     @Transaction
-    open suspend fun reorderPages(surfaceKey: String, postureKey: String, order: List<Int>) {
-        val moves = order.withIndex()
-            .filter { (newIndex, oldIndex) -> newIndex != oldIndex }
-            .map { (newIndex, oldIndex) -> oldIndex to newIndex }
+    open suspend fun applyPageMoves(
+        surfaceKey: String,
+        postureKey: String,
+        moves: List<Pair<Int, Int>>,
+    ) {
         if (moves.isEmpty()) return
 
         moves.forEach { (oldPage, _) ->
