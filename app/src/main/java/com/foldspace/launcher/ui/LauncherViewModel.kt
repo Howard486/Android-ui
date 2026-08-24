@@ -2,6 +2,9 @@ package com.foldspace.launcher.ui
 
 import android.app.Application
 import android.appwidget.AppWidgetProviderInfo
+import android.content.Intent
+import android.net.Uri
+import android.os.Process
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.foldspace.launcher.AppContainer
@@ -31,6 +34,9 @@ import com.foldspace.launcher.ui.icons.IconOverride
 import com.foldspace.launcher.ui.icons.LoadedIconPack
 import com.foldspace.launcher.home.PageKind
 import com.foldspace.launcher.home.Posture
+import com.foldspace.launcher.home.QuickTile
+import com.foldspace.launcher.home.QuickTileKind
+import com.foldspace.launcher.ui.hub.HubTab
 import com.foldspace.launcher.work.WorkItemsDeriver
 import com.foldspace.launcher.work.WorkItemsState
 import com.foldspace.launcher.notifications.FoldSpaceNotificationListener
@@ -791,6 +797,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun onHomeItemLongPress(item: HomeItem) {
         if (item.type == HomeItemType.Widget) return
+        if (item.type == HomeItemType.QuickLaunch) {
+            _quickEditItem.value = item
+            return
+        }
         _longPressItem.value = item
     }
 
@@ -827,6 +837,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setAgendaTitlesVisible(visible: Boolean) = viewModelScope.launch {
         container.settings.setAgendaTitlesVisible(visible)
+    }
+
+    fun setHubTab(tab: HubTab) = viewModelScope.launch {
+        container.settings.setHubTab(tab.key)
     }
 
     fun setBadgeStyle(style: BadgeStyle) = viewModelScope.launch {
@@ -927,22 +941,102 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     // ---- Pages ----
 
-    /** Long-press on blank space. Today it goes straight to the picker. */
+    /**
+     * Long-press on blank space.
+     *
+     * It used to open the widget picker directly. There are two things that
+     * can go in a cell now, so it asks first — the alternative would leave the
+     * quick-launch block with no way onto the home screen at all.
+     */
     fun onLongPressEmptyCell(page: Int, cellX: Int, cellY: Int) {
         pendingWidgetSurface = null
         pendingWidgetCell = Triple(page, cellX, cellY)
+        _placementChooser.value = Triple(page, cellX, cellY)
+    }
+
+    /** The cell a long press landed on, while the user chooses what to put there. */
+    private val _placementChooser = MutableStateFlow<Triple<Int, Int, Int>?>(null)
+    val placementChooser: StateFlow<Triple<Int, Int, Int>?> = _placementChooser.asStateFlow()
+
+    fun dismissPlacement() {
+        _placementChooser.value = null
+        pendingWidgetCell = null
+    }
+
+    fun placeWidgetHere() {
+        _placementChooser.value = null
         _widgetPickerOpen.value = true
     }
 
-    /**
-     * Adds a widget to the work page rather than to the desktop.
-     *
-     * This is how Outlook's and Teams' own widgets get onto that page — which
-     * is the only way their data reaches it at all, since neither exposes a
-     * readable interface and every password-only route into Microsoft's
-     * services has been closed. The app shows its own data with its own
-     * sign-in, and FoldSpace holds the frame.
-     */
+    fun placeQuickLaunchHere() {
+        val cell = _placementChooser.value ?: return
+        _placementChooser.value = null
+        pendingWidgetCell = null
+        val (page, cellX, cellY) = cell
+        viewModelScope.launch {
+            container.homeLayout.addQuickLaunch(
+                surface = HomeSurface.of(state.value.space),
+                posture = currentPosture(),
+                choice = gridChoice.value,
+                pageIndex = page,
+                cellX = cellX,
+                cellY = cellY,
+                // Two by two is where the block starts paying for itself:
+                // four cells that hold sixteen tiles instead of four icons.
+                spanX = 2,
+                spanY = 2,
+            )
+        }
+    }
+
+    // ---- Quick launch ----
+
+    /** The block being edited, or null. */
+    private val _quickEditItem = MutableStateFlow<HomeItem?>(null)
+    val quickEditItem: StateFlow<HomeItem?> = _quickEditItem.asStateFlow()
+
+    fun closeQuickEdit() {
+        _quickEditItem.value = null
+    }
+
+    fun setQuickTiles(item: HomeItem, tiles: List<QuickTile>) = viewModelScope.launch {
+        container.homeLayout.setQuickTiles(item.id, tiles)
+    }
+
+    fun shortcutsForApp(entry: AppEntry): List<AppShortcut> =
+        container.shortcuts.shortcutsFor(entry)
+
+    /** The installed app behind a tile, for its icon. Key first, package as a fallback. */
+    fun appForTileTarget(target: String): AppEntry? {
+        val apps = state.value.allApps
+        return apps.firstOrNull { it.key == target }
+            ?: apps.firstOrNull { it.packageName == target }
+            ?: apps.firstOrNull { it.packageName == target.substringBefore('/') }
+    }
+
+    fun launchTile(tile: QuickTile) {
+        when (tile.kind) {
+            QuickTileKind.App -> appForTileTarget(tile.target)?.let(::launch)
+
+            QuickTileKind.Shortcut -> {
+                val packageName = tile.packageName ?: return
+                val id = tile.shortcutId ?: return
+                val user = appForTileTarget(packageName)?.user ?: Process.myUserHandle()
+                if (!container.shortcuts.launch(packageName, id, user)) {
+                    // The app can revoke a shortcut at any time; opening the
+                    // app itself beats a tile that does nothing.
+                    appForTileTarget(packageName)?.let(::launch)
+                }
+            }
+
+            QuickTileKind.Url -> {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(tile.target))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                runCatching { getApplication<Application>().startActivity(intent) }
+            }
+        }
+    }
+
     /**
      * Moves a widget within the work strip.
      *
@@ -953,6 +1047,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         container.homeLayout.moveItem(item.id, pageIndex = 0, cellX = cellX, cellY = cellY)
     }
 
+    /**
+     * Adds a widget to the 摘要 strip rather than to the desktop.
+     *
+     * This is how Outlook's and Teams' own widgets get onto that page — which
+     * is the only way their data reaches it at all, since neither exposes a
+     * readable interface and every password-only route into Microsoft's
+     * services has been closed. The app shows its own data with its own
+     * sign-in, and FoldSpace holds the frame.
+     */
     fun addWorkWidget() {
         pendingWidgetSurface = HomeSurface.Work
         pendingWidgetCell = null

@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -88,6 +89,14 @@ fun WorkItemsPage(
     onConfigureMicrosoft: () -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    /**
+     * Content above 工項, inside the same scroll.
+     *
+     * The screen-time card used to ride on top of the news page, where it had
+     * nothing to do with the news. It belongs to the summary, and the summary
+     * is here.
+     */
+    header: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val tokens = FoldSpaceTheme.tokens
 
@@ -103,6 +112,8 @@ fun WorkItemsPage(
             .padding(horizontal = 20.dp),
     ) {
         Spacer(Modifier.height(12.dp))
+
+        header?.invoke(this)
 
         Row(
             Modifier.fillMaxWidth(),

@@ -47,6 +47,12 @@ import com.foldspace.launcher.home.HomeItem
 import com.foldspace.launcher.home.HomeItemType
 import com.foldspace.launcher.home.HomeLayout
 import com.foldspace.launcher.ui.feed.FeedPage
+import com.foldspace.launcher.ui.hub.HubPage
+import com.foldspace.launcher.ui.hub.HubTab
+import com.foldspace.launcher.ui.home.PlacementChooser
+import com.foldspace.launcher.ui.quicklaunch.QuickLaunchHost
+import com.foldspace.launcher.ui.quicklaunch.QuickTileEditor
+import com.foldspace.launcher.home.QuickTileCodec
 import com.foldspace.launcher.ui.home.FolderSheet
 import com.foldspace.launcher.ui.widgets.WidgetPicker
 import com.foldspace.launcher.ui.work.WorkItemsPage
@@ -135,6 +141,8 @@ fun FoldSpaceRoot(
     val pendingUnlock by viewModel.pendingUnlock.collectAsStateWithLifecycle()
     val microsoftState by viewModel.microsoft.collectAsStateWithLifecycle()
     val workWidgets by viewModel.workWidgets.collectAsStateWithLifecycle()
+    val placementChooser by viewModel.placementChooser.collectAsStateWithLifecycle()
+    val quickEditPending by viewModel.quickEditItem.collectAsStateWithLifecycle()
 
     // The prompt is raised here rather than in the ViewModel: BiometricPrompt
     // is a fragment and attaches to a FragmentActivity, which is exactly what
@@ -202,7 +210,7 @@ fun FoldSpaceRoot(
 
     val anyOverlayOpen = drawerOpen || notificationCenterOpen || settingsOpen || quickPanelOpen ||
         openFolder != null || widgetPickerOpen || sheet != null || longPressItem != null ||
-        pageOverviewOpen
+        pageOverviewOpen || placementChooser != null || quickEditPending != null
 
     // Back on a launcher means "close whatever is open", never "leave".
     BackHandler(enabled = anyOverlayOpen || editing) {
@@ -215,6 +223,8 @@ fun FoldSpaceRoot(
         viewModel.dismissLongPress()
         viewModel.setPageOverviewOpen(false)
         viewModel.setQuickPanelOpen(false)
+        viewModel.dismissPlacement()
+        viewModel.closeQuickEdit()
         viewModel.setEditing(false)
     }
 
@@ -265,59 +275,77 @@ fun FoldSpaceRoot(
                 onResizeWidget = viewModel::resizeWidget,
                 onRemoveItem = viewModel::removeItem,
                 onCellMeasured = viewModel::onCellMeasured,
-                feedContent = {
-                    FeedPage(
-                        state = feedState,
-                        onRefresh = { viewModel.refreshFeed() },
-                        onOpen = { item -> item.link?.let(onOpenLink) },
-                        contentPadding = bodyPadding,
-                        header = {
-                            // Recomputed when the feed refreshes rather than
-                            // held: a day of app history is not something to
-                            // keep in memory to redraw one card.
-                            val usage = remember(feedState) { viewModel.screenTimeToday() }
-                            val labels = remember(state.allApps) {
-                                state.allApps.associate { it.packageName to it.label }
-                            }
-                            ScreenTimeCard(
-                                summary = usage,
-                                labelFor = { labels[it] ?: it },
-                                hasAccess = state.hasUsageAccess,
-                                onRequestAccess = onOpenUsageSettings,
-                            )
-                            Spacer(Modifier.height(12.dp))
-                        },
+                quickLaunch = remember(state.allApps) {
+                    QuickLaunchHost(
+                        appFor = viewModel::appForTileTarget,
+                        onLaunch = viewModel::launchTile,
                     )
                 },
-                workContent = {
-                    LaunchedEffect(Unit) { viewModel.refreshMicrosoft() }
-                    // Re-read when the permission changes, so granting it
-                    // fills the card in without leaving and coming back.
-                    val agenda = remember(state.hasCalendarAccess, workItems) {
-                        viewModel.deviceAgenda()
-                    }
-                    WorkItemsPage(
-                        state = workItems,
-                        onOpenApp = onOpenPackage,
-                        onRequestNotificationAccess = onOpenNotificationSettings,
-                        contentPadding = bodyPadding,
-                        widgets = workWidgets,
-                        widgetHost = viewModel.widgetHost(),
-                        onAddWidget = viewModel::addWorkWidget,
-                        onRemoveWidget = viewModel::removeItem,
-                        onResizeWidget = viewModel::resizeWidget,
-                        onMoveWidget = { item, x, y -> viewModel.moveWorkWidget(item, x, y) },
-                        agenda = agenda,
-                        timeLabelFor = viewModel::agendaTimeLabel,
-                        hasCalendarAccess = state.hasCalendarAccess,
-                        onRequestCalendarAccess = onRequestCalendarAccess,
-                        microsoft = microsoftState,
-                        onJoinMeeting = onOpenLink,
-                        titlesVisible = state.settings.agendaTitlesVisible,
-                        onToggleTitles = viewModel::setAgendaTitlesVisible,
-                        onMicrosoftSignIn = viewModel::beginMicrosoftSignIn,
-                        onMicrosoftSignOut = viewModel::signOutMicrosoft,
-                        onConfigureMicrosoft = { viewModel.setSettingsOpen(true) },
+                hubContent = {
+                    HubPage(
+                        tab = HubTab.fromKey(state.settings.hubTab),
+                        onSelectTab = viewModel::setHubTab,
+                        summary = {
+                            LaunchedEffect(Unit) { viewModel.refreshMicrosoft() }
+                            // Re-read when the permission changes, so granting
+                            // it fills the card in without leaving and coming
+                            // back.
+                            val agenda = remember(state.hasCalendarAccess, workItems) {
+                                viewModel.deviceAgenda()
+                            }
+                            WorkItemsPage(
+                                state = workItems,
+                                onOpenApp = onOpenPackage,
+                                onRequestNotificationAccess = onOpenNotificationSettings,
+                                contentPadding = bodyPadding,
+                                widgets = workWidgets,
+                                widgetHost = viewModel.widgetHost(),
+                                onAddWidget = viewModel::addWorkWidget,
+                                onRemoveWidget = viewModel::removeItem,
+                                onResizeWidget = viewModel::resizeWidget,
+                                onMoveWidget = { item, x, y ->
+                                    viewModel.moveWorkWidget(item, x, y)
+                                },
+                                agenda = agenda,
+                                timeLabelFor = viewModel::agendaTimeLabel,
+                                hasCalendarAccess = state.hasCalendarAccess,
+                                onRequestCalendarAccess = onRequestCalendarAccess,
+                                microsoft = microsoftState,
+                                onJoinMeeting = onOpenLink,
+                                titlesVisible = state.settings.agendaTitlesVisible,
+                                onToggleTitles = viewModel::setAgendaTitlesVisible,
+                                onMicrosoftSignIn = viewModel::beginMicrosoftSignIn,
+                                onMicrosoftSignOut = viewModel::signOutMicrosoft,
+                                onConfigureMicrosoft = { viewModel.setSettingsOpen(true) },
+                                header = {
+                                    // Recomputed when the work items change
+                                    // rather than held: a day of app history is
+                                    // not something to keep in memory to redraw
+                                    // one card.
+                                    val usage = remember(workItems) {
+                                        viewModel.screenTimeToday()
+                                    }
+                                    val labels = remember(state.allApps) {
+                                        state.allApps.associate { it.packageName to it.label }
+                                    }
+                                    ScreenTimeCard(
+                                        summary = usage,
+                                        labelFor = { labels[it] ?: it },
+                                        hasAccess = state.hasUsageAccess,
+                                        onRequestAccess = onOpenUsageSettings,
+                                    )
+                                    Spacer(Modifier.height(12.dp))
+                                },
+                            )
+                        },
+                        news = {
+                            FeedPage(
+                                state = feedState,
+                                onRefresh = { viewModel.refreshFeed() },
+                                onOpen = { item -> item.link?.let(onOpenLink) },
+                                contentPadding = bodyPadding,
+                            )
+                        },
                     )
                 },
                 onLaunch = viewModel::launch,
@@ -472,6 +500,42 @@ fun FoldSpaceRoot(
                 },
                 contentPadding = systemPadding,
             )
+        }
+
+        Overlay(visible = placementChooser != null) {
+            PlacementChooser(
+                onPickWidget = viewModel::placeWidgetHere,
+                onPickQuickLaunch = viewModel::placeQuickLaunchHere,
+                onDismiss = viewModel::dismissPlacement,
+                contentPadding = systemPadding,
+            )
+        }
+
+        // Resolved against the live layout rather than trusting the snapshot
+        // the long press captured: a block that was resized while the editor
+        // was open would otherwise be told the wrong capacity.
+        val quickEditItem = quickEditPending?.let { pending ->
+            homeLayout.pages.asSequence()
+                .flatMap { it.items.asSequence() }
+                .firstOrNull { it.id == pending.id }
+                ?: pending
+        }
+
+        Overlay(visible = quickEditItem != null) {
+            quickEditItem?.let { item ->
+                QuickTileEditor(
+                    tiles = remember(item.payload) { QuickTileCodec.decode(item.payload) },
+                    spanX = item.spanX,
+                    spanY = item.spanY,
+                    apps = state.allApps,
+                    shortcutsFor = viewModel::shortcutsForApp,
+                    shortcutsAvailable = remember(item.id) { viewModel.shortcutsAvailable() },
+                    onSave = { tiles -> viewModel.setQuickTiles(item, tiles) },
+                    onRemoveBlock = { viewModel.removeItem(item) },
+                    onDismiss = viewModel::closeQuickEdit,
+                    contentPadding = systemPadding,
+                )
+            }
         }
 
         Overlay(visible = pageOverviewOpen) {
@@ -648,8 +712,8 @@ private fun HomeScaffold(
     onResizeWidget: (HomeItem, Int, Int) -> Unit,
     onRemoveItem: (HomeItem) -> Unit,
     onCellMeasured: (Int, Int) -> Unit,
-    feedContent: @Composable () -> Unit,
-    workContent: @Composable () -> Unit,
+    quickLaunch: QuickLaunchHost,
+    hubContent: @Composable () -> Unit,
     onLaunch: (AppEntry) -> Unit,
     onLongPress: (AppEntry) -> Unit,
     onSwipeUp: () -> Unit,
@@ -741,8 +805,8 @@ private fun HomeScaffold(
                         onRemoveItem = onRemoveItem,
                         onCellMeasured = onCellMeasured,
                         contentPadding = bodyPadding,
-                        feedContent = feedContent,
-                        workContent = workContent,
+                        quickLaunch = quickLaunch,
+                        hubContent = hubContent,
                         dockContent = dock,
                     )
                 }

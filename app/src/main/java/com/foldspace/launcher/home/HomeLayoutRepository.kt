@@ -381,6 +381,40 @@ class HomeLayoutRepository(
         )
     }
 
+    /**
+     * Places an empty quick-launch block. The user fills it from the editor.
+     */
+    suspend fun addQuickLaunch(
+        surface: HomeSurface,
+        posture: Posture,
+        choice: GridChoice,
+        pageIndex: Int,
+        cellX: Int,
+        cellY: Int,
+        spanX: Int,
+        spanY: Int,
+    ) {
+        val grid = GridSpec.of(surface, posture, choice)
+        dao.insert(
+            HomeItemEntity(
+                surfaceKey = surface.key,
+                postureKey = posture.key,
+                pageIndex = pageIndex,
+                cellX = cellX.coerceIn(0, grid.columns - 1),
+                cellY = cellY.coerceIn(0, grid.rows - 1),
+                spanX = spanX.coerceIn(1, grid.columns),
+                spanY = spanY.coerceIn(1, grid.rows),
+                itemType = HomeItemType.QuickLaunch.key,
+                payload = "",
+            ),
+        )
+    }
+
+    /** Replaces a block's tiles. */
+    suspend fun setQuickTiles(itemId: Long, tiles: List<QuickTile>) {
+        dao.setPayload(itemId, QuickTileCodec.encode(tiles))
+    }
+
     /** A widget an app asked to pin, already bound by the system. */
     suspend fun addPinnedWidget(
         surface: HomeSurface,
@@ -592,6 +626,7 @@ class HomeLayoutRepository(
                         className = row.className,
                         folderTitle = row.folderTitle,
                         inFolder = foldersById[row.container]?.folderTitle,
+                        payload = row.payload,
                     )
                 }
 
@@ -689,6 +724,28 @@ class HomeLayoutRepository(
                             packageName = packageName,
                             className = app.className,
                             userSerial = app.key.substringAfterLast('#').toLongOrNull(),
+                        ),
+                    )
+                    restored++
+                }
+
+                // Quick-launch blocks carry everything they need in their
+                // payload, so unlike a widget they survive the trip. A tile
+                // pointing at an app this device does not have simply does
+                // not resolve; the block still restores, which beats losing
+                // the whole arrangement of it over one absent app.
+                scoped.filter { it.type == HomeItemType.QuickLaunch.key }.forEach { item ->
+                    dao.insert(
+                        HomeItemEntity(
+                            surfaceKey = surface.key,
+                            postureKey = posture.key,
+                            pageIndex = item.pageIndex,
+                            cellX = item.cellX,
+                            cellY = item.cellY,
+                            spanX = item.spanX,
+                            spanY = item.spanY,
+                            itemType = HomeItemType.QuickLaunch.key,
+                            payload = item.payload.orEmpty(),
                         ),
                     )
                     restored++
@@ -939,6 +996,7 @@ class HomeLayoutRepository(
                 appWidgetId = row.appWidgetId,
                 shortcutId = row.shortcutId,
                 shortcutPackage = row.packageName.takeIf { type == HomeItemType.Shortcut },
+                payload = row.payload,
                 unavailable = type == HomeItemType.App && app == null,
             )
         }

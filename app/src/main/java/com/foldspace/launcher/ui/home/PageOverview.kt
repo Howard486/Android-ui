@@ -328,6 +328,7 @@ private fun AddPageCard(onClick: () -> Unit) {
 
 private fun PageKind.label(): String = when (this) {
     PageKind.Grid -> "頁面"
+    PageKind.Hub -> "摘要"
     PageKind.Feed -> "新聞"
     PageKind.Widgets -> "小工具"
     PageKind.Work -> "工項"

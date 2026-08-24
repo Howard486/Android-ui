@@ -66,6 +66,16 @@ data class HomeItemEntity(
 
     /** Shortcut: the id its publishing app assigned. */
     val shortcutId: String? = null,
+
+    /**
+     * Free-form payload for item types that carry more than a component.
+     *
+     * Today only the quick-launch block uses it, holding its encoded tiles.
+     * A column rather than a side table because it is one string belonging to
+     * one row, and it arrived by a real migration so nobody lost a desktop
+     * over it.
+     */
+    val payload: String? = null,
 ) {
     companion object {
         const val CONTAINER_DESKTOP = -1L

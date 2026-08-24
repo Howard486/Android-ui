@@ -1,5 +1,7 @@
 package com.foldspace.launcher.home
 
+import java.util.Base64
+
 /**
  * One item as it appears in a backup file.
  *
@@ -21,6 +23,15 @@ data class BackupItem(
     val folderTitle: String? = null,
     /** The title of the folder holding this item, if any. */
     val inFolder: String? = null,
+    /**
+     * A quick-launch block's tiles, exactly as the database holds them.
+     *
+     * Carried through the backup base64-encoded, because the payload's own
+     * separators are the control characters this format uses for its fields —
+     * writing it raw would corrupt the line, and stripping the controls would
+     * silently flatten every tile into one.
+     */
+    val payload: String? = null,
 )
 
 data class BackupPage(
@@ -105,6 +116,7 @@ object LayoutBackupCodec {
                     // that could contain the separator and corrupt the line.
                     item.folderTitle.orEmpty().sanitised(),
                     item.inFolder.orEmpty().sanitised(),
+                    item.payload.orEmpty().encodePayload(),
                 ).joinToString(FIELD),
             ).append('\n')
         }
@@ -148,6 +160,20 @@ object LayoutBackupCodec {
 
     private fun String.sanitised(): String = filter { it.code >= 0x20 }
 
+    private fun String.encodePayload(): String =
+        if (isEmpty()) {
+            ""
+        } else {
+            Base64.getUrlEncoder().withoutPadding().encodeToString(toByteArray(Charsets.UTF_8))
+        }
+
+    private fun String.decodePayload(): String? {
+        if (isBlank()) return null
+        // A truncated or hand-edited field must cost one item, not the file.
+        return runCatching { String(Base64.getUrlDecoder().decode(this), Charsets.UTF_8) }
+            .getOrNull()
+    }
+
     private fun decodePage(parts: List<String>): BackupPage? {
         if (parts.size < 6) return null
         return BackupPage(
@@ -174,6 +200,9 @@ object LayoutBackupCodec {
             className = parts[10].takeIf { it.isNotBlank() },
             folderTitle = parts[11].takeIf { it.isNotBlank() },
             inFolder = parts[12].takeIf { it.isNotBlank() },
+            // Absent in a v1 or v2 file written before quick-launch blocks
+            // existed, which is the ordinary case and not an error.
+            payload = parts.getOrNull(13)?.decodePayload(),
         )
     }
 }

@@ -110,7 +110,18 @@ enum class PageKind(val key: String) {
     /** Apps, folders and widgets on the fixed grid. */
     Grid("grid"),
 
-    /** The leftmost feed page (§ redesign doc). */
+    /**
+     * The leftmost page: 摘要 and 新聞 behind two tabs.
+     *
+     * It replaces the old context-dependent leading page, where 通用 got the
+     * news and 工作 got the work items and 簡易 got nothing — so the same swipe
+     * landed somewhere different depending on which Space you were in, and one
+     * of the two things was always unreachable. The tabs make both reachable
+     * from anywhere, which is what Microsoft Launcher's glance page does.
+     */
+    Hub("hub"),
+
+    /** The old news-only leading page. Kept so a stored key still parses. */
     Feed("feed"),
 
     /** A page the user reserved for widgets. Widgets are allowed anywhere;
@@ -150,6 +161,16 @@ enum class HomeItemType(val key: String) {
      * `LauncherApps.startShortcut`, not through a launch intent.
      */
     Shortcut("shortcut"),
+
+    /**
+     * A block of small action tiles — an app, one of an app's shortcuts, a web
+     * address. Launcher X's idea, which exists on iOS because iOS will not let
+     * anything but a widget onto the home screen; here the value is not the
+     * container but the tiles, since a URL and a shortcut are things the
+     * desktop grid cannot otherwise hold, and sixteen of them fit where four
+     * icons would.
+     */
+    QuickLaunch("quick"),
     ;
 
     companion object {
@@ -182,6 +203,8 @@ data class HomeItem(
     val shortcutId: String? = null,
     /** The package a shortcut belongs to, kept even when [app] resolves. */
     val shortcutPackage: String? = null,
+    /** Encoded tiles, for [HomeItemType.QuickLaunch]. See [QuickTileCodec]. */
+    val payload: String? = null,
     /** True for an app item whose package could not be resolved right now. */
     val unavailable: Boolean = false,
 ) {
@@ -191,6 +214,9 @@ data class HomeItem(
             HomeItemType.Folder -> folderTitle.orEmpty()
             HomeItemType.Shortcut -> folderTitle.orEmpty()
             HomeItemType.Widget -> ""
+            // A block is many things at once; naming it after any one of them
+            // would be worse than leaving it unnamed.
+            HomeItemType.QuickLaunch -> ""
         }
 
     /**
@@ -214,6 +240,9 @@ data class HomeItem(
     fun unreadCount(countFor: (String) -> Int): Int = when (type) {
         HomeItemType.Folder -> folderContents.sumOf { it.unreadCount(countFor) }
         HomeItemType.Widget -> 0
+        // A block stands for several apps at once; one number over it would
+        // not say which of them it belonged to.
+        HomeItemType.QuickLaunch -> 0
         else -> app?.let { countFor(it.packageName) } ?: 0
     }
 }
@@ -381,12 +410,20 @@ data class HomeLayout(
             leading = leadingFor(space),
         )
 
-        /** 通用 gets the news page, 工作 gets work items, 簡易 gets neither. */
-        fun leadingFor(space: SpaceId): PageKind? = when (space) {
-            SpaceId.General -> PageKind.Feed
-            SpaceId.Work -> PageKind.Work
-            SpaceId.Simple -> null
-        }
+        /**
+         * The same leading page wherever there is one.
+         *
+         * It used to differ per Space: 通用 got the news, 工作 got the work
+         * summary, so switching context silently took one of them away and
+         * neither was reachable from the other. One hub with two tabs fixes
+         * that.
+         *
+         * 簡易 still has none, and that is not an oversight — it is one fixed
+         * screen with no pages and no swiping, which is the entire reason it
+         * exists. Giving it a news page would be undoing the mode.
+         */
+        fun leadingFor(space: SpaceId): PageKind? =
+            if (space == SpaceId.Simple) null else PageKind.Hub
     }
 }
 

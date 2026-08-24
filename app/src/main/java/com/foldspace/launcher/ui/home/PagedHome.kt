@@ -54,7 +54,10 @@ import com.foldspace.launcher.spaces.SpaceDensity
 import com.foldspace.launcher.ui.components.AppIcon
 import com.foldspace.launcher.ui.components.AppTile
 import com.foldspace.launcher.ui.components.LabelOnWallpaper
+import com.foldspace.launcher.home.QuickTileCodec
 import com.foldspace.launcher.ui.icons.Squircle
+import com.foldspace.launcher.ui.quicklaunch.QuickLaunchCell
+import com.foldspace.launcher.ui.quicklaunch.QuickLaunchHost
 import com.foldspace.launcher.ui.theme.FoldSpaceTheme
 import com.foldspace.launcher.ui.widgets.WidgetCell
 import com.foldspace.launcher.widgets.WidgetHostController
@@ -96,8 +99,8 @@ fun PagedHome(
     onCellMeasured: (widthDp: Int, heightDp: Int) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
-    feedContent: (@Composable () -> Unit)? = null,
-    workContent: (@Composable () -> Unit)? = null,
+    quickLaunch: QuickLaunchHost? = null,
+    hubContent: (@Composable () -> Unit)? = null,
     dockContent: (@Composable () -> Unit)? = null,
 ) {
     val gridPages = layout.pages.ifEmpty { listOf(HomePage(0, emptyList())) }
@@ -138,11 +141,8 @@ fun PagedHome(
                 val leading = layout.leading.takeIf { pagerIndex < leadingCount }
                 val page = gridPages.getOrNull(pagerIndex - leadingCount)
                 when {
-                    leading == PageKind.Feed ->
-                        feedContent?.invoke() ?: EmptyPage("尚未設定新聞來源")
-
-                    leading == PageKind.Work ->
-                        workContent?.invoke() ?: EmptyPage("尚無工項")
+                    leading == PageKind.Hub ->
+                        hubContent?.invoke() ?: EmptyPage("尚無內容")
 
                     page == null -> EmptyPage("這一頁還是空的")
 
@@ -168,6 +168,7 @@ fun PagedHome(
                         onResizeWidget = onResizeWidget,
                         onRemoveItem = onRemoveItem,
                         onCellMeasured = onCellMeasured,
+                        quickLaunch = quickLaunch,
                         onDragUpdate = { drag = it },
                         onDragEnd = {
                             val current = drag
@@ -268,6 +269,7 @@ private fun CellGrid(
     onResizeWidget: (item: HomeItem, spanX: Int, spanY: Int) -> Unit,
     onRemoveItem: (HomeItem) -> Unit,
     onCellMeasured: (widthDp: Int, heightDp: Int) -> Unit,
+    quickLaunch: QuickLaunchHost?,
     onDragUpdate: (DragState?) -> Unit,
     onDragEnd: () -> Unit,
 ) {
@@ -485,8 +487,16 @@ private fun CellGrid(
                     cellHeightDp = cellHeightDp,
                     spanX = spanX,
                     spanY = spanY,
+                    quickLaunch = quickLaunch,
                     onClick = {
-                        if (item.type == HomeItemType.Folder) onOpenFolder(item) else onLaunch(item)
+                        when (item.type) {
+                            HomeItemType.Folder -> onOpenFolder(item)
+                            // A block has no single action of its own; the
+                            // tiles inside it have. Tapping the block itself
+                            // is therefore how you fill it.
+                            HomeItemType.QuickLaunch -> onLongPress(item)
+                            else -> onLaunch(item)
+                        }
                     },
                     onLongClick = { onLongPress(item) },
                 )
@@ -590,6 +600,7 @@ private fun HomeCell(
     cellHeightDp: Int,
     spanX: Int,
     spanY: Int,
+    quickLaunch: QuickLaunchHost?,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -656,6 +667,26 @@ private fun HomeCell(
                     appWidgetId = id,
                     widthDp = cellWidthDp * spanX,
                     heightDp = cellHeightDp * spanY,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+
+        HomeItemType.QuickLaunch -> {
+            if (quickLaunch == null) {
+                UnavailableCell("捷徑")
+            } else {
+                // Decoded per composition rather than held on the item: the
+                // payload is a short string and the alternative is a second
+                // copy of the same list that can disagree with the database.
+                val tiles = remember(item.payload) { QuickTileCodec.decode(item.payload) }
+                QuickLaunchCell(
+                    tiles = tiles,
+                    spanX = spanX,
+                    spanY = spanY,
+                    appFor = quickLaunch.appFor,
+                    onLaunch = quickLaunch.onLaunch,
+                    onEdit = onClick,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

@@ -4,10 +4,12 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [HomeItemEntity::class, HomePageEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class FoldSpaceDatabase : RoomDatabase() {
@@ -17,6 +19,19 @@ abstract class FoldSpaceDatabase : RoomDatabase() {
     abstract fun homePageDao(): HomePageDao
 
     companion object {
+        /**
+         * Adds the quick-launch payload.
+         *
+         * A nullable column with no default, so every existing row is
+         * untouched and reads back as null — which is what every item that is
+         * not a quick-launch block should have.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE home_items ADD COLUMN payload TEXT")
+            }
+        }
+
         @Volatile
         private var instance: FoldSpaceDatabase? = null
 
@@ -27,10 +42,12 @@ abstract class FoldSpaceDatabase : RoomDatabase() {
                     FoldSpaceDatabase::class.java,
                     "foldspace.db",
                 )
-                    // The layout is rebuilt from installed apps if it is ever
-                    // lost, so a destructive migration costs the user their
-                    // arrangement but never leaves the launcher unusable.
-                    // Replace with real migrations once V1.0 ships.
+                    // A real migration for 4 -> 5, so this update keeps the
+                    // arrangement. The destructive fallback stays for any
+                    // path that has no migration declared — it is a floor, not
+                    // the plan, and every version bump from here should bring
+                    // its own migration rather than lean on it.
+                    .addMigrations(MIGRATION_4_5)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }

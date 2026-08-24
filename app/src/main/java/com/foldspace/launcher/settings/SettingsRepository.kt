@@ -170,6 +170,14 @@ data class FoldSpaceSettings(
      * the user's to make, not mine.
      */
     val agendaTitlesVisible: Boolean = true,
+    /**
+     * Which hub tab was last open — 摘要 or 新聞.
+     *
+     * Stored rather than held in memory: the hub is one swipe from every home
+     * screen, and a tab that resets on every process death is a tab you keep
+     * re-choosing.
+     */
+    val hubTab: String = "summary",
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "foldspace")
@@ -340,6 +348,8 @@ class SettingsRepository(
     suspend fun setAgendaTitlesVisible(visible: Boolean) =
         edit { it[Keys.AgendaTitles] = visible }
 
+    suspend fun setHubTab(key: String) = edit { it[Keys.HubTab] = key }
+
     suspend fun setBadgeStyle(style: BadgeStyle) = edit { it[Keys.BadgeStyle] = style.key }
 
     suspend fun setDesktopModeOnUnfold(enabled: Boolean) =
@@ -406,6 +416,7 @@ class SettingsRepository(
         lockedApps = prefs[Keys.LockedApps].orEmpty(),
         microsoftClientId = prefs[Keys.MicrosoftClientId]?.takeIf { it.isNotBlank() },
         agendaTitlesVisible = prefs[Keys.AgendaTitles] ?: true,
+        hubTab = prefs[Keys.HubTab] ?: "summary",
         // Clamped on the way out as well as in: a value written by an older
         // build, or by a restored backup, must not produce a dock with zero
         // rows and no way back to the settings screen.
@@ -438,6 +449,7 @@ class SettingsRepository(
         val LockedApps = stringSetPreferencesKey("locked_apps")
         val MicrosoftClientId = stringPreferencesKey("microsoft_client_id")
         val AgendaTitles = booleanPreferencesKey("agenda_titles_visible")
+        val HubTab = stringPreferencesKey("hub_tab")
         val DockRows = intPreferencesKey("dock_rows")
         val DockColumns = intPreferencesKey("dock_columns")
 

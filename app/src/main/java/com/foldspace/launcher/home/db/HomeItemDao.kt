@@ -325,6 +325,10 @@ abstract class HomeItemDao {
     @Query("UPDATE home_items SET spanX = :spanX, spanY = :spanY WHERE id = :id")
     abstract suspend fun setSpan(id: Long, spanX: Int, spanY: Int)
 
+    /** The quick-launch block's tiles. Nothing else writes this column. */
+    @Query("UPDATE home_items SET payload = :payload WHERE id = :id")
+    abstract suspend fun setPayload(id: Long, payload: String)
+
     /**
      * Positions a folder member. Members live off-page, and their slot number
      * is stored in cellX so that the unique index — which includes `container`
