@@ -292,11 +292,20 @@ fun FoldSpaceRoot(
                 },
                 workContent = {
                     LaunchedEffect(Unit) { viewModel.refreshMicrosoft() }
+                    // Re-read when the permission changes, so granting it
+                    // fills the card in without leaving and coming back.
+                    val agenda = remember(state.hasCalendarAccess, workItems) {
+                        viewModel.deviceAgenda()
+                    }
                     WorkItemsPage(
                         state = workItems,
                         onOpenApp = onOpenPackage,
                         onRequestNotificationAccess = onOpenNotificationSettings,
                         contentPadding = bodyPadding,
+                        agenda = agenda,
+                        timeLabelFor = viewModel::agendaTimeLabel,
+                        hasCalendarAccess = state.hasCalendarAccess,
+                        onRequestCalendarAccess = onRequestCalendarAccess,
                         microsoft = microsoftState,
                         onMicrosoftSignIn = viewModel::beginMicrosoftSignIn,
                         onMicrosoftSignOut = viewModel::signOutMicrosoft,

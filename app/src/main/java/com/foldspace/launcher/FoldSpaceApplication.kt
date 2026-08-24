@@ -5,6 +5,7 @@ import android.content.Context
 import com.foldspace.launcher.ai.NanoAdapter
 import com.foldspace.launcher.ai.PromptNanoAdapter
 import com.foldspace.launcher.ai.TextInference
+import com.foldspace.launcher.calendar.DeviceCalendarSource
 import com.foldspace.launcher.context.ContextEngine
 import com.foldspace.launcher.desktop.DesktopLauncher
 import com.foldspace.launcher.microsoft.MicrosoftRepository
@@ -119,6 +120,14 @@ class AppContainer(context: Context) {
 
     /** §4 — two apps side by side, as far as the platform permits. */
     val splitLauncher = SplitLauncher(context, launcherApps)
+
+    /**
+     * Today's calendar, from the device rather than from an account.
+     *
+     * The zero-setup route: no registration, no token, no network. Graph is
+     * the upgrade, and the only path to To Do.
+     */
+    val deviceCalendar = DeviceCalendarSource(context)
 
     /** Calendar and tasks from Microsoft Graph. No model, no cache, no notes. */
     val microsoft = MicrosoftRepository(context, TokenStore(context))

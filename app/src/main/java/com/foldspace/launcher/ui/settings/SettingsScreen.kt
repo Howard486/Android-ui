@@ -412,6 +412,14 @@ fun SettingsScreen(
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
+                    text = "不做這一步也沒關係：工項頁的「今天」讀的是這台裝置上的行事曆，" +
+                        "不需要註冊也不需要連線。Azure 註冊換到的是 Microsoft To Do 待辦，" +
+                        "以及不依賴 Outlook 同步設定的行事曆。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tokens.textMuted,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
                     text = "只要求讀取權限（行事曆、待辦、基本資料），不會修改任何東西。" +
                         "權杖用裝置金鑰庫加密後存在本機，行事曆內容不會被儲存。",
                     style = MaterialTheme.typography.labelSmall,

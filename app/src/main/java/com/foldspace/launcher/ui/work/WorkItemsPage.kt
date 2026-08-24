@@ -16,6 +16,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import com.foldspace.launcher.calendar.collapsedLabel
+import com.foldspace.launcher.calendar.AgendaSummary
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -47,6 +51,10 @@ fun WorkItemsPage(
     state: WorkItemsState,
     onOpenApp: (String) -> Unit,
     onRequestNotificationAccess: () -> Unit,
+    agenda: AgendaSummary,
+    timeLabelFor: (Long) -> String,
+    hasCalendarAccess: Boolean,
+    onRequestCalendarAccess: () -> Unit,
     microsoft: MicrosoftState,
     onMicrosoftSignIn: () -> Unit,
     onMicrosoftSignOut: () -> Unit,
@@ -78,6 +86,15 @@ fun WorkItemsPage(
                 Pill(text = "${state.needsAction} 項待處理", color = tokens.accent)
             }
         }
+
+        Spacer(Modifier.height(12.dp))
+
+        AgendaSection(
+            agenda = agenda,
+            timeLabelFor = timeLabelFor,
+            hasAccess = hasCalendarAccess,
+            onRequestAccess = onRequestCalendarAccess,
+        )
 
         Spacer(Modifier.height(12.dp))
 
@@ -374,5 +391,129 @@ private fun MicrosoftSection(
             style = MaterialTheme.typography.labelSmall,
             color = tokens.textMuted,
         )
+    }
+}
+
+/**
+ * Today, read from the device's own calendar provider.
+ *
+ * The route that needs no account and no app registration: whatever Outlook,
+ * Samsung Calendar or Google Calendar syncs into the provider is already
+ * here, offline included. Microsoft Graph, above, is the upgrade — and the
+ * only way to reach To Do.
+ *
+ * Titles are collapsed by default. A launcher's home screen is the one
+ * surface visible to whoever is standing next to you, and "Q3 budget review
+ * with Acme" is not something to put there without being asked. The time and
+ * a coarse category are enough to plan around; the title is one tap away.
+ */
+@Composable
+private fun AgendaSection(
+    agenda: AgendaSummary,
+    timeLabelFor: (Long) -> String,
+    hasAccess: Boolean,
+    onRequestAccess: () -> Unit,
+) {
+    val tokens = FoldSpaceTheme.tokens
+    // Which rows the user has opened, this composition only. Deliberately not
+    // persisted: revealing a title is a decision about right now, not a
+    // setting that should quietly stay on tomorrow.
+    val revealed = remember { mutableStateListOf<Long>() }
+
+    FoldCard(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "今天",
+                style = MaterialTheme.typography.titleMedium,
+                color = tokens.textPrimary,
+            )
+            if (hasAccess && agenda.remaining > 0) {
+                Pill(text = "還有 ${agenda.remaining} 個", color = tokens.accent)
+            }
+        }
+
+        if (!hasAccess) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "需要行事曆權限才能顯示。讀的是這台裝置上的行事曆，不會連線、" +
+                    "不需要帳號，也不會存下任何內容。",
+                style = MaterialTheme.typography.bodySmall,
+                color = tokens.textSecondary,
+            )
+            Spacer(Modifier.height(8.dp))
+            TextAction(text = "授予權限", onClick = onRequestAccess)
+            return@FoldCard
+        }
+
+        if (agenda.isEmpty) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "今天沒有行程。如果 Outlook 的行事曆沒有出現，請到 Outlook 的" +
+                    "帳號設定把「同步日曆」打開 —— 它預設不一定會寫進系統行事曆。",
+                style = MaterialTheme.typography.bodySmall,
+                color = tokens.textMuted,
+            )
+            return@FoldCard
+        }
+
+        Spacer(Modifier.height(8.dp))
+        agenda.events.forEachIndexed { index, event ->
+            val open = event.id in revealed
+            val isNext = index == agenda.nextIndex
+
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        if (open) revealed.remove(event.id) else revealed.add(event.id)
+                    }
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = if (event.allDay) "全天" else timeLabelFor(event.startMillis),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isNext) tokens.accent else tokens.textMuted,
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = if (open) event.title else event.collapsedLabel(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (open) tokens.textPrimary else tokens.textSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (open) {
+                        event.location?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = tokens.textMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        event.calendarName?.let {
+                            Text(
+                                text = it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = tokens.textMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = if (open) "隱藏" else "顯示",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tokens.accent,
+                )
+            }
+        }
     }
 }

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.provider.CalendarContract
+import com.foldspace.launcher.calendar.Agenda
 import com.foldspace.launcher.context.ContextEvent
 import java.util.concurrent.TimeUnit
 
@@ -81,32 +82,15 @@ class CalendarSignalSource(
     /**
      * A coarse label, never the title itself.
      *
-     * The title is matched against a small keyword list and then discarded.
-     * Passing "Q3 budget review with Acme" into a rule would put a private
-     * calendar entry into persisted settings.
+     * The keyword list lives in [Agenda] now, shared with the agenda the work
+     * page draws. Two copies of "what counts as a meeting" would eventually
+     * disagree, and the disagreement would be invisible.
      */
-    private fun categorise(title: String?): String {
-        val text = title.orEmpty().lowercase()
-        return when {
-            MEETING_WORDS.any { it in text } -> CATEGORY_MEETING
-            FOCUS_WORDS.any { it in text } -> CATEGORY_FOCUS
-            TRAVEL_WORDS.any { it in text } -> CATEGORY_TRAVEL
-            else -> CATEGORY_BUSY
-        }
-    }
+    private fun categorise(title: String?): String = Agenda.categorise(title).key
 
     private companion object {
         const val LOOKBACK_MINUTES = 5L
         const val LOOKAHEAD_MINUTES = 15L
-
-        const val CATEGORY_MEETING = "meeting"
-        const val CATEGORY_FOCUS = "focus"
-        const val CATEGORY_TRAVEL = "travel"
-        const val CATEGORY_BUSY = "busy"
-
-        val MEETING_WORDS = listOf("meeting", "sync", "standup", "1:1", "會議", "會", "面談")
-        val FOCUS_WORDS = listOf("focus", "deep work", "專注", "工作時間")
-        val TRAVEL_WORDS = listOf("flight", "train", "travel", "航班", "出差", "交通")
 
         val PROJECTION = arrayOf(
             CalendarContract.Instances.TITLE,

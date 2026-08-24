@@ -42,6 +42,7 @@ import com.foldspace.launcher.powerdock.PowerDockState
 import com.foldspace.launcher.settings.FoldSpaceSettings
 import com.foldspace.launcher.desktop.FreeformState
 import com.foldspace.launcher.microsoft.MicrosoftState
+import com.foldspace.launcher.calendar.AgendaSummary
 import com.foldspace.launcher.quick.QuickController
 import com.foldspace.launcher.usage.ScreenTimeSummary
 import com.foldspace.launcher.settings.GridChoice
@@ -1024,6 +1025,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun quickControls(): QuickController = container.quickControls
+
+    /**
+     * Today's agenda from the device's calendar provider.
+     *
+     * Read when the page is looked at, like the screen-time card, and for the
+     * same reason: this is somebody's day, and holding a copy of it in memory
+     * for as long as the launcher runs buys nothing (§12.1, §16.1).
+     */
+    fun deviceAgenda(): AgendaSummary = container.deviceCalendar.today()
+
+    fun agendaTimeLabel(millis: Long): String = container.deviceCalendar.timeLabelFor(millis)
 
     // ---- Microsoft ----
 
