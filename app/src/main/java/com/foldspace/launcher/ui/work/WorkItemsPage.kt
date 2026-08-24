@@ -1,6 +1,8 @@
 package com.foldspace.launcher.ui.work
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,8 +13,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -86,6 +86,11 @@ fun WorkItemsPage(
         modifier
             .fillMaxSize()
             .padding(contentPadding)
+            // The page scrolls as one. It used to be a fixed column with a
+            // LazyColumn at the bottom, so everything above that list — the
+            // widgets, today, Microsoft — was simply cut off wherever the
+            // screen ended.
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp),
     ) {
         Spacer(Modifier.height(12.dp))
@@ -166,7 +171,10 @@ fun WorkItemsPage(
         Spacer(Modifier.height(12.dp))
 
         if (state.groups.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.fillMaxWidth().height(EMPTY_HEIGHT),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
                     text = "目前沒有待處理的工項",
                     style = MaterialTheme.typography.bodyMedium,
@@ -176,37 +184,36 @@ fun WorkItemsPage(
             return@Column
         }
 
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(bottom = 24.dp),
-        ) {
+        // A plain column, not a LazyColumn: one cannot be nested inside a
+        // scrolling parent, and this list is a handful of notifications rather
+        // than something worth virtualising.
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             state.groups.forEach { group ->
-                item(key = "header-${group.packageName}") {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { onOpenApp(group.packageName) }
-                            .padding(top = 6.dp, bottom = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = group.displayName,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = tokens.textPrimary,
-                        )
-                        Text(
-                            text = "開啟",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = tokens.accent,
-                        )
-                    }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenApp(group.packageName) }
+                        .padding(top = 6.dp, bottom = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = group.displayName,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = tokens.textPrimary,
+                    )
+                    Text(
+                        text = "開啟",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = tokens.accent,
+                    )
                 }
-                items(group.items, key = { it.key }) { workItem ->
+                group.items.forEach { workItem ->
                     WorkItemRow(item = workItem, onClick = { onOpenApp(workItem.packageName) })
                 }
             }
         }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -612,11 +619,17 @@ private fun WorkWidgets(
         }
 
         Spacer(Modifier.height(8.dp))
-        // A fixed height: this is a strip inside a page, and a grid that grows
-        // with its contents would push the work items off the bottom.
+        // Tall enough for the tallest widget on it, and no taller. A fixed
+        // 240dp cropped a three-row inbox widget halfway through a message;
+        // a strip that grows without limit would push the work items off the
+        // page. The page scrolls now, so the ceiling is the grid's own rows.
+        val rows = items
+            .maxOfOrNull { it.spanY.coerceAtLeast(1) }
+            ?.coerceIn(1, layout.grid.rows)
+            ?: 1
         CellGridLayout(
             grid = layout.grid,
-            modifier = Modifier.fillMaxWidth().height(STRIP_HEIGHT),
+            modifier = Modifier.fillMaxWidth().height((STRIP_ROW_DP * rows).dp),
         ) {
             items.forEach { item ->
                 Box(
@@ -635,7 +648,7 @@ private fun WorkWidgets(
                             controller = widgetHost,
                             appWidgetId = id,
                             widthDp = STRIP_CELL_DP * item.spanX.coerceAtLeast(1),
-                            heightDp = STRIP_CELL_DP * item.spanY.coerceAtLeast(1),
+                            heightDp = STRIP_ROW_DP * item.spanY.coerceAtLeast(1),
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -662,8 +675,17 @@ private fun WorkWidgets(
     }
 }
 
-/** Three rows of the work strip. */
-private val STRIP_HEIGHT = 240.dp
+/**
+ * One row of the work strip, in dp.
+ *
+ * Taller than a desktop cell on purpose: the widgets that belong here are list
+ * widgets — an inbox, an agenda — and a row of one has to be tall enough to
+ * show a message rather than a sliver of one.
+ */
+private const val STRIP_ROW_DP = 104
 
-/** Nominal cell size handed to the widget host for its size hint. */
+/** Nominal cell width handed to the widget host for its size hint. */
 private const val STRIP_CELL_DP = 80
+
+/** Enough to read as deliberate emptiness rather than a truncated page. */
+private val EMPTY_HEIGHT = 160.dp
