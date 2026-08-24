@@ -40,8 +40,16 @@ class HomeLayoutRepository(
      * list, so an app that vanished shows as unavailable rather than as a
      * dangling row, and pages filtered to the ones this context shows.
      */
-    fun observe(space: SpaceId, posture: Posture, choice: GridChoice): Flow<HomeLayout> {
-        val surface = HomeSurface.of(space)
+    fun observe(space: SpaceId, posture: Posture, choice: GridChoice): Flow<HomeLayout> =
+        observeSurface(HomeSurface.of(space), space, posture, choice)
+
+    /** The same, for a surface that no Space maps to — the work strip. */
+    fun observeSurface(
+        surface: HomeSurface,
+        space: SpaceId,
+        posture: Posture,
+        choice: GridChoice,
+    ): Flow<HomeLayout> {
         return combine(
             dao.observeLayout(surface.key, posture.key),
             pageDao.observePages(surface.key, posture.key),
@@ -61,6 +69,7 @@ class HomeLayoutRepository(
         apps: List<AppEntry>,
         choice: GridChoice,
     ) {
+        if (!surface.autoPlacesApps) return
         if (dao.countIn(surface.key, posture.key) > 0) return
         if (apps.isEmpty()) return
 
@@ -166,6 +175,8 @@ class HomeLayoutRepository(
         choice: GridChoice,
         hidden: Set<String> = emptySet(),
     ) {
+        // Only the desktop follows the installed list. The work strip holds
+        // what was put there and nothing else.
         val installedPackages = apps.mapTo(mutableSetOf()) { it.packageName }
         val placed = dao.placedPackages().toSet()
 

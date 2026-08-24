@@ -73,6 +73,15 @@ class DeviceCalendarSource(
                     allDay = it.getInt(INDEX_ALL_DAY) == 1,
                     location = it.getString(INDEX_LOCATION)?.takeIf { text -> text.isNotBlank() },
                     calendarName = it.getString(INDEX_CALENDAR)?.takeIf { text -> text.isNotBlank() },
+                    // Location first: that is where Outlook puts a Teams
+                    // link. Only the URL is kept — the description it may
+                    // have come from holds dial-in numbers, passcodes and an
+                    // attendee list, and none of that reaches the screen.
+                    joinUrl = MeetingLink.find(
+                        it.getString(INDEX_LOCATION),
+                        it.getString(INDEX_DESCRIPTION),
+                        title,
+                    )?.first,
                 )
             }
         }
@@ -101,6 +110,7 @@ class DeviceCalendarSource(
             CalendarContract.Instances.EVENT_LOCATION,
             CalendarContract.Instances.CALENDAR_DISPLAY_NAME,
             CalendarContract.Instances.STATUS,
+            CalendarContract.Instances.DESCRIPTION,
         )
         const val INDEX_ID = 0
         const val INDEX_TITLE = 1
@@ -110,5 +120,6 @@ class DeviceCalendarSource(
         const val INDEX_LOCATION = 5
         const val INDEX_CALENDAR = 6
         const val INDEX_STATUS = 7
+        const val INDEX_DESCRIPTION = 8
     }
 }

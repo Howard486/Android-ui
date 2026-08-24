@@ -28,6 +28,15 @@ data class AgendaEvent(
     val allDay: Boolean,
     val location: String?,
     val calendarName: String?,
+    /**
+     * The join link, if this is an online meeting.
+     *
+     * Extracted from the event and kept alone — the description it came out of
+     * is not carried. A meeting invitation body routinely holds a dial-in
+     * number, a passcode and an attendee list, and none of that has any
+     * business on a home screen.
+     */
+    val joinUrl: String? = null,
 ) {
     val category: AgendaCategory get() = Agenda.categorise(title)
 }
@@ -103,6 +112,52 @@ object Agenda {
     private val MEETING_WORDS = listOf("meeting", "sync", "standup", "1:1", "會議", "會", "面談")
     private val FOCUS_WORDS = listOf("focus", "deep work", "專注", "工作時間")
     private val TRAVEL_WORDS = listOf("flight", "train", "travel", "航班", "出差", "交通")
+}
+
+/**
+ * Finds an online-meeting link in an event.
+ *
+ * This is what makes Teams meetings work without touching a Microsoft
+ * account at all: a Teams meeting *is* a calendar event, and its join URL is
+ * in the invitation. Nothing here authenticates, fetches or asks anyone's
+ * permission — the link is already on the device.
+ */
+object MeetingLink {
+
+    /** Hosts worth offering a button for, longest-lived first. */
+    private val HOSTS = listOf(
+        "teams.microsoft.com" to "Teams",
+        "teams.live.com" to "Teams",
+        "zoom.us" to "Zoom",
+        "meet.google.com" to "Meet",
+        "webex.com" to "Webex",
+    )
+
+    /**
+     * The first join link in any of [texts], with the service it belongs to.
+     *
+     * Scans in the order given, so a link in the location field — which is
+     * where Outlook puts it for a Teams meeting — beats one buried in the
+     * body.
+     */
+    fun find(vararg texts: String?): Pair<String, String>? {
+        for (text in texts) {
+            if (text.isNullOrBlank()) continue
+            val match = URL.find(text) ?: continue
+            val url = match.value.trimEnd('.', ',', ')', '>', '"', ';')
+            val host = HOSTS.firstOrNull { (needle, _) -> needle in url.lowercase() } ?: continue
+            return url to host.second
+        }
+        return null
+    }
+
+    /**
+     * Deliberately narrow: `https` only, and stopping at whitespace or a
+     * closing bracket. A calendar body is arbitrary text from whoever sent
+     * the invitation, and a greedy pattern over it is how a launcher ends up
+     * offering to open something nobody meant it to.
+     */
+    private val URL = Regex("""https://[^\s<>"']+""")
 }
 
 /**

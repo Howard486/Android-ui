@@ -244,6 +244,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 HomeLayout.empty(SpaceId.General, Posture.Folded),
             )
 
+    /**
+     * The widgets on the work page.
+     *
+     * Its own surface, so they neither move when the desktop is reflowed nor
+     * compete with the apps the desktop auto-places.
+     */
+    val workWidgets: StateFlow<HomeLayout> =
+        combine(posture, gridChoice) { p, grid -> p to grid }
+            .distinctUntilChanged()
+            .flatMapLatest { (p, grid) ->
+                container.homeLayout.observeSurface(HomeSurface.Work, SpaceId.Work, p, grid)
+            }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                HomeLayout.empty(SpaceId.Work, Posture.Folded),
+            )
+
     // ---- Editing (phase 3) ----
 
     private val _editing = MutableStateFlow(false)
@@ -395,6 +413,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     /** Where the widget the user is adding will land. */
     private var pendingWidgetCell: Triple<Int, Int, Int>? = null
+
+    /** Which surface the widget being chosen is destined for. */
+    private var pendingWidgetSurface: HomeSurface? = null
 
     /**
      * The measured size of one grid cell, in dp, reported by the grid itself.
@@ -889,13 +910,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     /** Long-press on blank space. Today it goes straight to the picker. */
     fun onLongPressEmptyCell(page: Int, cellX: Int, cellY: Int) {
+        pendingWidgetSurface = null
         pendingWidgetCell = Triple(page, cellX, cellY)
+        _widgetPickerOpen.value = true
+    }
+
+    /**
+     * Adds a widget to the work page rather than to the desktop.
+     *
+     * This is how Outlook's and Teams' own widgets get onto that page — which
+     * is the only way their data reaches it at all, since neither exposes a
+     * readable interface and every password-only route into Microsoft's
+     * services has been closed. The app shows its own data with its own
+     * sign-in, and FoldSpace holds the frame.
+     */
+    fun addWorkWidget() {
+        pendingWidgetSurface = HomeSurface.Work
+        pendingWidgetCell = null
         _widgetPickerOpen.value = true
     }
 
     fun closeWidgetPicker() {
         _widgetPickerOpen.value = false
         pendingWidgetCell = null
+        pendingWidgetSurface = null
     }
 
     fun availableWidgets(): List<AppWidgetProviderInfo> =
@@ -949,11 +987,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun placeWidget(appWidgetId: Int, info: AppWidgetProviderInfo) {
-        val cell = pendingWidgetCell ?: homeLayout.value.firstFreeCellAnywhere()
+        val surface = pendingWidgetSurface ?: HomeSurface.of(state.value.space)
+        val target = if (surface == HomeSurface.Work) workWidgets.value else homeLayout.value
+        val cell = pendingWidgetCell ?: target.firstFreeCellAnywhere()
         pendingWidgetCell = null
+        pendingWidgetSurface = null
 
         viewModelScope.launch {
-            val layout = homeLayout.value
+            val layout = target
             val (cellWidthDp, cellHeightDp) = measuredCellDp ?: FALLBACK_CELL_DP
             val (spanX, spanY) = container.widgetHost.defaultSpan(
                 info,
@@ -961,7 +1002,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 cellHeightDp = cellHeightDp,
             )
             container.homeLayout.addWidget(
-                surface = HomeSurface.of(state.value.space),
+                surface = surface,
                 posture = currentPosture(),
                 choice = gridChoice.value,
                 pageIndex = cell.first,

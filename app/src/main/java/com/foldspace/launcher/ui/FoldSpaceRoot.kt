@@ -136,6 +136,7 @@ fun FoldSpaceRoot(
     val quickPanelOpen by viewModel.quickPanelOpen.collectAsStateWithLifecycle()
     val pendingUnlock by viewModel.pendingUnlock.collectAsStateWithLifecycle()
     val microsoftState by viewModel.microsoft.collectAsStateWithLifecycle()
+    val workWidgets by viewModel.workWidgets.collectAsStateWithLifecycle()
 
     // The prompt is raised here rather than in the ViewModel: BiometricPrompt
     // is a fragment and attaches to a FragmentActivity, which is exactly what
@@ -302,11 +303,16 @@ fun FoldSpaceRoot(
                         onOpenApp = onOpenPackage,
                         onRequestNotificationAccess = onOpenNotificationSettings,
                         contentPadding = bodyPadding,
+                        widgets = workWidgets,
+                        widgetHost = viewModel.widgetHost(),
+                        onAddWidget = viewModel::addWorkWidget,
+                        onRemoveWidget = viewModel::removeItem,
                         agenda = agenda,
                         timeLabelFor = viewModel::agendaTimeLabel,
                         hasCalendarAccess = state.hasCalendarAccess,
                         onRequestCalendarAccess = onRequestCalendarAccess,
                         microsoft = microsoftState,
+                        onJoinMeeting = onOpenLink,
                         onMicrosoftSignIn = viewModel::beginMicrosoftSignIn,
                         onMicrosoftSignOut = viewModel::signOutMicrosoft,
                         onConfigureMicrosoft = { viewModel.setSettingsOpen(true) },

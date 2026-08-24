@@ -38,7 +38,22 @@ enum class Posture(val key: String) {
 enum class HomeSurface(val key: String) {
     Desktop("desktop"),
     Simple("simple"),
+
+    /**
+     * The widgets the user puts on the work page.
+     *
+     * A surface of its own rather than a page of the desktop, because the work
+     * page is derived from the context rather than stored, and because these
+     * widgets should not move when the desktop is reflowed to a new grid.
+     *
+     * Never seeded with apps — it starts empty and holds only what is added
+     * to it deliberately.
+     */
+    Work("work"),
     ;
+
+    /** Whether new installs are auto-placed here. */
+    val autoPlacesApps: Boolean get() = this != Work
 
     companion object {
         fun of(space: SpaceId): HomeSurface =
@@ -72,6 +87,10 @@ data class GridSpec(val columns: Int, val rows: Int) {
             choice: GridChoice = GridChoice.Ios,
         ): GridSpec = when {
             surface == HomeSurface.Simple -> Simple
+            // A strip, not a page: it sits inside the work page above the
+            // items, and a full-height grid there would push them off screen.
+            surface == HomeSurface.Work ->
+                GridSpec(columns = if (posture == Posture.Unfolded) 6 else 4, rows = 3)
             posture == Posture.Unfolded ->
                 GridSpec(choice.unfoldedColumns, choice.unfoldedRows)
 

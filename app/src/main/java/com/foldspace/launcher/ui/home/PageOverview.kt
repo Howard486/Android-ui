@@ -31,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.foldspace.launcher.home.GridSpec
@@ -128,6 +130,10 @@ fun PageOverview(
                         }
                     },
                     onDragEnd = { dragging = null },
+                    canMoveLeft = position > 0,
+                    canMoveRight = position < pages.lastIndex,
+                    onMoveLeft = { onMovePage(position, position - 1) },
+                    onMoveRight = { onMovePage(position, position + 1) },
                 )
             }
 
@@ -150,8 +156,19 @@ private fun PageCard(
     onDragStart: () -> Unit,
     onDragStep: (Int) -> Unit,
     onDragEnd: () -> Unit,
+    canMoveLeft: Boolean,
+    canMoveRight: Boolean,
+    onMoveLeft: () -> Unit,
+    onMoveRight: () -> Unit,
 ) {
     val tokens = FoldSpaceTheme.tokens
+    val density = LocalDensity.current
+    // The gesture outlives recompositions, so it must not hold the callbacks
+    // it was installed with — they close over this card's position.
+    val startDrag by rememberUpdatedState(onDragStart)
+    val stepDrag by rememberUpdatedState(onDragStep)
+    val endDrag by rememberUpdatedState(onDragEnd)
+
     val occupied = remember(page) {
         buildSet {
             page.items.forEach { item ->
@@ -178,13 +195,17 @@ private fun PageCard(
                     shape = RoundedCornerShape(14.dp),
                 )
                 .clickable(onClick = onOpen)
-                .pointerInput(position, grid) {
+                // Keyed on the grid alone. It used to be keyed on `position`
+                // as well — the very thing a reorder changes — so the first
+                // step restarted the pointer input and cancelled the drag
+                // that caused it. One step and then nothing, every time.
+                .pointerInput(grid) {
                     var travel = 0f
-                    val step = CARD_STEP_PX
+                    val step = with(density) { CARD_WIDTH.toPx() + CARD_GAP.toPx() }
                     detectDragGesturesAfterLongPress(
                         onDragStart = {
                             travel = 0f
-                            onDragStart()
+                            startDrag()
                         },
                         onDrag = { change, amount ->
                             change.consume()
@@ -192,11 +213,11 @@ private fun PageCard(
                             val steps = (travel / step).toInt()
                             if (steps != 0) {
                                 travel -= steps * step
-                                onDragStep(steps)
+                                stepDrag(steps)
                             }
                         },
-                        onDragEnd = onDragEnd,
-                        onDragCancel = onDragEnd,
+                        onDragEnd = { endDrag() },
+                        onDragCancel = { endDrag() },
                     )
                 }
                 .padding(8.dp),
@@ -212,6 +233,19 @@ private fun PageCard(
                 style = MaterialTheme.typography.labelSmall,
                 color = if (isCurrent) tokens.accent else tokens.textMuted,
             )
+        }
+
+        // Explicit move buttons, and they are the guarantee rather than the
+        // garnish. Reordering by drag has now failed on the device twice, and
+        // a page order that can only be changed by a gesture is a page order
+        // that cannot be changed when the gesture breaks. These cannot be
+        // stolen by anything in the pointer stream.
+        Row(
+            Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            MoveButton(label = "‹", enabled = canMoveLeft, onClick = onMoveLeft)
+            MoveButton(label = "›", enabled = canMoveRight, onClick = onMoveRight)
         }
 
         if (occupied.isEmpty()) {
@@ -304,11 +338,29 @@ private val CARD_WIDTH = 104.dp
 private val CARD_HEIGHT = 168.dp
 private val CARD_GAP = 12.dp
 
+
 /**
- * How far the finger travels per card, in pixels.
+ * One nudge, one position.
  *
- * Approximated from the card's own width rather than measured: the overview is
- * a fixed-size row, and threading a measurement back into a gesture for what
- * amounts to a step size would be more machinery than the precision is worth.
+ * A 32dp target rather than the 48dp minimum because two of them sit on a
+ * card barely wider than that, and the alternative — no button at all — is
+ * what has left page order unchangeable for three builds.
  */
-private const val CARD_STEP_PX = 320f
+@Composable
+private fun MoveButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+    val tokens = FoldSpaceTheme.tokens
+    Box(
+        Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(if (enabled) tokens.surfaceElevated else tokens.surfaceElevated.copy(alpha = 0.3f))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleMedium,
+            color = if (enabled) tokens.textPrimary else tokens.textMuted,
+        )
+    }
+}

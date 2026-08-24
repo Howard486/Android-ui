@@ -101,3 +101,69 @@ class AgendaTest {
         assertEquals("23:59", Agenda.timeLabel(99, 99))
     }
 }
+
+class MeetingLinkTest {
+
+    @Test
+    fun `a Teams link in the location is found`() {
+        val (url, host) = MeetingLink.find(
+            "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc",
+            null,
+            "週會",
+        )!!
+        assertEquals("Teams", host)
+        assertTrue(url.startsWith("https://teams.microsoft.com/"))
+    }
+
+    @Test
+    fun `location wins over the body, which is where Outlook puts it`() {
+        val (url, _) = MeetingLink.find(
+            "https://teams.microsoft.com/first",
+            "https://zoom.us/j/second",
+        )!!
+        assertEquals("https://teams.microsoft.com/first", url)
+    }
+
+    @Test
+    fun `the other services people actually use are recognised`() {
+        assertEquals("Zoom", MeetingLink.find("https://zoom.us/j/123")?.second)
+        assertEquals("Meet", MeetingLink.find("https://meet.google.com/abc-defg-hij")?.second)
+        assertEquals("Webex", MeetingLink.find("https://acme.webex.com/meet/x")?.second)
+    }
+
+    @Test
+    fun `an ordinary link is not offered as a meeting`() {
+        assertNull(MeetingLink.find("https://example.com/notes"))
+        assertNull(MeetingLink.find("會議室 3B"))
+        assertNull(MeetingLink.find(null, null, null))
+        assertNull(MeetingLink.find(""))
+    }
+
+    @Test
+    fun `only https is matched, so a plain-text host is not turned into a link`() {
+        assertNull(MeetingLink.find("http://teams.microsoft.com/insecure"))
+        assertNull(MeetingLink.find("teams.microsoft.com/l/meetup-join/x"))
+    }
+
+    @Test
+    fun `trailing punctuation from prose is not part of the url`() {
+        val (url, _) = MeetingLink.find("加入: https://teams.microsoft.com/l/x.")!!
+        assertTrue(!url.endsWith("."))
+        assertEquals("https://teams.microsoft.com/l/x", url)
+    }
+
+    @Test
+    fun `a url wrapped in a bracket stops at the bracket`() {
+        val (url, _) = MeetingLink.find("""<https://zoom.us/j/9>""")!!
+        assertEquals("https://zoom.us/j/9", url)
+    }
+
+    @Test
+    fun `only the url is carried, never the body it came from`() {
+        val body = "撥入號碼 +886 2 1234 5678，密碼 998877\nhttps://teams.microsoft.com/l/x"
+        val (url, _) = MeetingLink.find(null, body)!!
+        assertEquals("https://teams.microsoft.com/l/x", url)
+        assertTrue("998877" !in url)
+        assertTrue("+886" !in url)
+    }
+}

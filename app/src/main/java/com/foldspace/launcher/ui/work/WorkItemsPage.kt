@@ -16,6 +16,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import com.foldspace.launcher.widgets.WidgetHostController
+import com.foldspace.launcher.ui.home.gridCell
+import com.foldspace.launcher.ui.widgets.WidgetCell
+import com.foldspace.launcher.ui.home.CellGridLayout
+import com.foldspace.launcher.home.HomeLayout
+import com.foldspace.launcher.home.HomeItem
+import androidx.compose.ui.draw.clip
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
 import com.foldspace.launcher.calendar.collapsedLabel
 import com.foldspace.launcher.calendar.AgendaSummary
 import androidx.compose.runtime.remember
@@ -51,11 +64,16 @@ fun WorkItemsPage(
     state: WorkItemsState,
     onOpenApp: (String) -> Unit,
     onRequestNotificationAccess: () -> Unit,
+    widgets: HomeLayout,
+    widgetHost: WidgetHostController?,
+    onAddWidget: () -> Unit,
+    onRemoveWidget: (HomeItem) -> Unit,
     agenda: AgendaSummary,
     timeLabelFor: (Long) -> String,
     hasCalendarAccess: Boolean,
     onRequestCalendarAccess: () -> Unit,
     microsoft: MicrosoftState,
+    onJoinMeeting: (String) -> Unit,
     onMicrosoftSignIn: () -> Unit,
     onMicrosoftSignOut: () -> Unit,
     onConfigureMicrosoft: () -> Unit,
@@ -89,11 +107,21 @@ fun WorkItemsPage(
 
         Spacer(Modifier.height(12.dp))
 
+        WorkWidgets(
+            layout = widgets,
+            widgetHost = widgetHost,
+            onAdd = onAddWidget,
+            onRemove = onRemoveWidget,
+        )
+
+        Spacer(Modifier.height(12.dp))
+
         AgendaSection(
             agenda = agenda,
             timeLabelFor = timeLabelFor,
             hasAccess = hasCalendarAccess,
             onRequestAccess = onRequestCalendarAccess,
+            onJoin = onJoinMeeting,
         )
 
         Spacer(Modifier.height(12.dp))
@@ -413,6 +441,7 @@ private fun AgendaSection(
     timeLabelFor: (Long) -> String,
     hasAccess: Boolean,
     onRequestAccess: () -> Unit,
+    onJoin: (String) -> Unit,
 ) {
     val tokens = FoldSpaceTheme.tokens
     // Which rows the user has opened, this composition only. Deliberately not
@@ -508,6 +537,12 @@ private fun AgendaSection(
                         }
                     }
                 }
+                // A Teams meeting is a calendar event with a join link in
+                // it, so this needs no account and no permission beyond the
+                // one already granted.
+                event.joinUrl?.let { url ->
+                    TextAction(text = "加入", onClick = { onJoin(url) })
+                }
                 Text(
                     text = if (open) "隱藏" else "顯示",
                     style = MaterialTheme.typography.labelSmall,
@@ -517,3 +552,118 @@ private fun AgendaSection(
         }
     }
 }
+
+/**
+ * The widgets the user puts on this page.
+ *
+ * The reason this exists: Outlook and Teams expose nothing a launcher can
+ * read, and every password-only route into Microsoft's services — IMAP, POP,
+ * EWS, ActiveSync — has been closed. But both ship widgets of their own, and
+ * those show real data using the app's own sign-in. So the honest way to put
+ * work information on this page is not to fetch it, but to hold the frame and
+ * let the app draw into it.
+ *
+ * Stored on its own surface, so nothing here moves when the desktop is
+ * reflowed to a different grid, and no newly installed app is ever placed
+ * among them.
+ */
+@Composable
+private fun WorkWidgets(
+    layout: HomeLayout,
+    widgetHost: WidgetHostController?,
+    onAdd: () -> Unit,
+    onRemove: (HomeItem) -> Unit,
+) {
+    val tokens = FoldSpaceTheme.tokens
+    var editing by remember { mutableStateOf(false) }
+    val items = layout.pages.firstOrNull()?.items.orEmpty()
+
+    FoldCard(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "小工具",
+                style = MaterialTheme.typography.titleMedium,
+                color = tokens.textPrimary,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (items.isNotEmpty()) {
+                    TextAction(
+                        text = if (editing) "完成" else "編輯",
+                        onClick = { editing = !editing },
+                        color = if (editing) tokens.accent else tokens.textSecondary,
+                    )
+                }
+                TextAction(text = "新增", onClick = onAdd)
+            }
+        }
+
+        if (items.isEmpty()) {
+            Text(
+                text = "放上 Outlook 或 Teams 自己的小工具，它們會用自己的登入顯示真實資料 —— " +
+                    "FoldSpace 不會讀取你的帳戶。",
+                style = MaterialTheme.typography.bodySmall,
+                color = tokens.textMuted,
+            )
+            return@FoldCard
+        }
+
+        Spacer(Modifier.height(8.dp))
+        // A fixed height: this is a strip inside a page, and a grid that grows
+        // with its contents would push the work items off the bottom.
+        CellGridLayout(
+            grid = layout.grid,
+            modifier = Modifier.fillMaxWidth().height(STRIP_HEIGHT),
+        ) {
+            items.forEach { item ->
+                Box(
+                    Modifier
+                        .gridCell(
+                            item.cellX,
+                            item.cellY,
+                            item.spanX.coerceAtLeast(1),
+                            item.spanY.coerceAtLeast(1),
+                        )
+                        .padding(2.dp),
+                ) {
+                    val id = item.appWidgetId
+                    if (widgetHost != null && id != null) {
+                        WidgetCell(
+                            controller = widgetHost,
+                            appWidgetId = id,
+                            widthDp = STRIP_CELL_DP * item.spanX.coerceAtLeast(1),
+                            heightDp = STRIP_CELL_DP * item.spanY.coerceAtLeast(1),
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    if (editing) {
+                        Box(
+                            Modifier
+                                .align(Alignment.TopStart)
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(tokens.surfaceElevated)
+                                .clickable { onRemove(item) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "✕",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = tokens.textPrimary,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Three rows of the work strip. */
+private val STRIP_HEIGHT = 240.dp
+
+/** Nominal cell size handed to the widget host for its size hint. */
+private const val STRIP_CELL_DP = 80
