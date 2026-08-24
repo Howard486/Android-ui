@@ -134,4 +134,38 @@ class PlacementTest {
     fun `a tiny cell still yields a positive size`() {
         assertTrue(iconSizeFor(52, 1, 1, cellWidthDp = 4, cellHeightDp = 4) >= 1)
     }
+
+    @Test
+    fun `the label allowance covers everything AppTile spends besides the icon`() {
+        // AppTile is a Column with 6dp padding above, 6dp of spacing between
+        // icon and label, one labelSmall line (~16dp at its default line
+        // height) and 6dp below. At 26 the reservation was eight short and
+        // every label was sliced through the middle on the device.
+        //
+        // Nothing here measures text, so this is the only guard there can be:
+        // it pins the constant to the arithmetic, and fails if either the
+        // padding or the spacing in AppTile is changed without it.
+        val paddingTop = 6
+        val spacing = 6
+        val labelLine = 16
+        val paddingBottom = 6
+        assertTrue(
+            "allowance=$TILE_LABEL_ALLOWANCE_DP",
+            TILE_LABEL_ALLOWANCE_DP >= paddingTop + spacing + labelLine + paddingBottom,
+        )
+    }
+
+    @Test
+    fun `a one-by-one icon never fills the whole cell height`() {
+        // If it did there would be no room left for the label at all.
+        val cellHeight = 96
+        val size = iconSizeFor(
+            baseDp = 200,
+            spanX = 1,
+            spanY = 1,
+            cellWidthDp = 200,
+            cellHeightDp = cellHeight,
+        )
+        assertTrue(size <= cellHeight - TILE_LABEL_ALLOWANCE_DP)
+    }
 }

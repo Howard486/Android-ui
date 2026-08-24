@@ -343,6 +343,18 @@ private fun CellGrid(
         var pressed: HomeItem? = null
         var moved = false
 
+        // The drag lives here, not in the hoisted `drag` parameter.
+        //
+        // `Modifier.pointerInput` captures its lambda once per key, and the
+        // gesture then runs in a coroutine that outlives many recompositions.
+        // Reading `drag` inside it therefore read whatever it was when the
+        // gesture was installed — which is null, always — so `onDrag` bailed
+        // out on its first line, `moved` never became true, and every drag
+        // ended as a long press. That is why dragging an app has been dead
+        // through two rounds of fixing the wrong thing: the gesture ownership
+        // was corrected last time, and this was still underneath it.
+        var current: DragState? = null
+
         fun cellAt(offset: Offset): Pair<Int, Int>? {
             if (size.width == 0 || size.height == 0) return null
             val x = (offset.x / (size.width.toFloat() / layout.grid.columns)).toInt()
@@ -364,7 +376,10 @@ private fun CellGrid(
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 }
                 when {
-                    item != null -> onDragUpdate(DragState(item, offset, pageIndex, cell, null))
+                    item != null -> {
+                        current = DragState(item, offset, pageIndex, cell, null)
+                        onDragUpdate(current)
+                    }
 
                     // Long-pressing blank space is the only discoverable
                     // way to add a widget.
@@ -375,7 +390,7 @@ private fun CellGrid(
                 change.consume()
                 position += amount
                 travel += amount
-                val current = drag ?: return@detectDragGesturesAfterLongPress
+                val active = current ?: return@detectDragGesturesAfterLongPress
                 if (!moved && travel.getDistance() > DRAG_SLOP_PX) {
                     // The first real movement settles it: this is a drag, not
                     // a long press. Edit mode is what the code always claimed
@@ -384,20 +399,20 @@ private fun CellGrid(
                     onBeginEditing()
                 }
                 val cell = cellAt(position)
-                onDragUpdate(
-                    current.copy(
-                        pointer = position,
-                        targetPage = gridPageAt(pagerState.currentPage),
-                        targetCell = cell,
-                        targetItem = cell
-                            ?.let { (x, y) -> page.occupantAt(x, y) }
-                            ?.takeIf { it.id != current.item.id },
-                    ),
+                current = active.copy(
+                    pointer = position,
+                    targetPage = gridPageAt(pagerState.currentPage),
+                    targetCell = cell,
+                    targetItem = cell
+                        ?.let { (x, y) -> page.occupantAt(x, y) }
+                        ?.takeIf { it.id != active.item.id },
                 )
+                onDragUpdate(current)
             },
             onDragEnd = {
                 val item = pressed
                 pressed = null
+                current = null
                 if (moved || item == null) {
                     onDragEnd()
                 } else {
@@ -408,6 +423,7 @@ private fun CellGrid(
             },
             onDragCancel = {
                 pressed = null
+                current = null
                 onDragEnd()
             },
         )

@@ -403,8 +403,22 @@ fun iconSizeFor(
     return wanted.coerceIn(1, fits.coerceAtLeast(1))
 }
 
-/** Room kept for the label and the tile's own padding, in dp. */
-private const val LABEL_ALLOWANCE_DP = 26
+/**
+ * Room kept below the icon, in dp.
+ *
+ * Must cover everything `AppTile` spends besides the icon itself: 6dp of
+ * padding above, 6dp of spacing between icon and label, one `labelSmall` line
+ * (~16dp at its default line height) and 6dp of padding below. At 26 the sum
+ * was eight short and every label was sliced through the middle — which is
+ * what a device screenshot showed, and what nothing here could have caught,
+ * because no test measures text.
+ *
+ * Kept as one constant next to the arithmetic that uses it rather than
+ * duplicated in the composable, so the two cannot drift apart again.
+ */
+const val TILE_LABEL_ALLOWANCE_DP = 34
+
+private const val LABEL_ALLOWANCE_DP = TILE_LABEL_ALLOWANCE_DP
 
 /** A cell assignment: which page, and where on it. */
 data class CellSlot(val pageIndex: Int, val cellX: Int, val cellY: Int)

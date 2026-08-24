@@ -14,6 +14,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -110,6 +112,12 @@ private fun Modifier.bodyDrag(
     onMoveBy: (cellsX: Int, cellsY: Int) -> Unit,
 ): Modifier = composed {
     val drag = remember { HandleGesture() }
+    // The caller's lambda closes over the item's *current* cell, and the item
+    // moves during the drag. Without this the gesture kept calling the lambda
+    // captured when pointerInput was installed, which always computed the
+    // target from the cell the widget started in — so it moved one step and
+    // then refused to move again. Same fault as the grid's drag, one file over.
+    val move by rememberUpdatedState(onMoveBy)
     this
         // A tap in edit mode belongs to the frame, not to the widget.
         .pointerInput(Unit) { detectTapGestures { } }
@@ -132,7 +140,7 @@ private fun Modifier.bodyDrag(
                     // when the drag ends.
                     drag.travel -= stepX * cellWidthPx
                     drag.travelY -= stepY * cellHeightPx
-                    onMoveBy(stepX, stepY)
+                    move(stepX, stepY)
                 },
             )
         }
@@ -159,6 +167,10 @@ private fun BoxScope.ResizeHandle(
     // nothing draws from them, so making them observable would recompose the
     // frame dozens of times a drag for no visible difference.
     val gesture = remember { HandleGesture() }
+    // Same reason as the body drag: these close over the span being resized.
+    val propose by rememberUpdatedState(onPropose)
+    val commit by rememberUpdatedState(onCommit)
+    val span by rememberUpdatedState(currentSpan)
 
     Box(
         Modifier
@@ -168,7 +180,7 @@ private fun BoxScope.ResizeHandle(
             .pointerInput(cellPx, horizontal) {
                 detectDragGestures(
                     onDragStart = {
-                        gesture.startSpan = currentSpan()
+                        gesture.startSpan = span()
                         gesture.travel = 0f
                     },
                     onDrag = { change, amount ->
@@ -176,10 +188,10 @@ private fun BoxScope.ResizeHandle(
                         if (cellPx <= 0f) return@detectDragGestures
                         gesture.travel += if (horizontal) amount.x else amount.y
                         val cells = (gesture.travel / cellPx).roundToInt()
-                        onPropose((gesture.startSpan + cells).coerceAtLeast(1))
+                        propose((gesture.startSpan + cells).coerceAtLeast(1))
                     },
-                    onDragEnd = onCommit,
-                    onDragCancel = onCommit,
+                    onDragEnd = { commit() },
+                    onDragCancel = { commit() },
                 )
             },
     )

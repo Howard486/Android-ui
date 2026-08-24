@@ -736,7 +736,15 @@ private fun HomeScaffold(
                     )
                 }
 
-                if (desktopMode) {
+                // The posture is checked here, not only in the ViewModel.
+                //
+                // A flag can be stale — and was: when WindowLayoutInfo does
+                // not emit on a display swap, the collector never learns the
+                // device folded and the cover screen kept drawing a taskbar.
+                // The layout mode in hand cannot be stale, so the shell asks
+                // it directly and the flag only decides what to do when the
+                // device really is unfolded.
+                if (desktopMode && state.window.layoutMode == LayoutMode.Expanded) {
                     DesktopHome(
                         taskbarApps = state.dockApps(capacity = TASKBAR_CAPACITY),
                         notifications = state.notifications,

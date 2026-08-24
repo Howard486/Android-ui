@@ -14,7 +14,6 @@ import androidx.fragment.app.FragmentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.foldspace.launcher.notifications.FoldSpaceNotificationListener
@@ -43,6 +42,17 @@ import kotlinx.coroutines.launch
 class MainActivity : FragmentActivity() {
 
     private val viewModel: LauncherViewModel by viewModels()
+
+    /**
+     * §4 — the fold posture.
+     *
+     * A field, not a `remember`: this activity declares `configChanges`, so
+     * folding onto the cover display arrives as [onConfigurationChanged] and
+     * has to be forwarded. `windowLayoutInfo` alone does not reliably emit for
+     * a display swap, and when it does not the launcher keeps drawing the
+     * unfolded layout on a screen that is no longer unfolded.
+     */
+    private val foldTracker: FoldStateTracker by lazy { FoldStateTracker(this) }
 
     /**
      * §5.1 — the result is ignored deliberately: the role may be granted,
@@ -122,6 +132,11 @@ class MainActivity : FragmentActivity() {
             viewModel.refreshPermissions()
         }
 
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        foldTracker.onConfigurationChanged()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -136,10 +151,11 @@ class MainActivity : FragmentActivity() {
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
 
-            // §4 — one tracker per activity, restarted with the composition.
-            val tracker = remember { FoldStateTracker(this) }
-            androidx.compose.runtime.LaunchedEffect(tracker) {
-                tracker.states().collect(viewModel::onWindowStateChanged)
+            // §4 — one tracker per activity, held as a field rather than
+            // remembered, because onConfigurationChanged has to reach it and
+            // that arrives outside the composition.
+            androidx.compose.runtime.LaunchedEffect(foldTracker) {
+                foldTracker.states().collect(viewModel::onWindowStateChanged)
             }
 
             val tokens = Themes.of(state.activeTheme)

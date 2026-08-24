@@ -5,6 +5,9 @@ import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowLayoutInfo
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 
@@ -17,9 +20,31 @@ import kotlinx.coroutines.flow.map
  */
 class FoldStateTracker(private val activity: Activity) {
 
+    /**
+     * Configuration changes, as a second source of truth.
+     *
+     * `windowLayoutInfo` emits when *display features* change, and folding a
+     * Fold shut moves the activity to a different display entirely. On the
+     * hardware that does not emit for that, nothing ever re-read the width and
+     * the launcher stayed in its unfolded layout on the cover screen.
+     *
+     * MainActivity declares `configChanges`, so the swap arrives there as
+     * `onConfigurationChanged` and nothing was listening. Now it is.
+     */
+    private val configurationChanges =
+        MutableSharedFlow<Unit>(replay = 1, extraBufferCapacity = 1)
+
+    fun onConfigurationChanged() {
+        configurationChanges.tryEmit(Unit)
+    }
+
     fun states(): Flow<FoldWindowState> =
-        WindowInfoTracker.getOrCreate(activity)
-            .windowLayoutInfo(activity)
+        combine(
+            WindowInfoTracker.getOrCreate(activity).windowLayoutInfo(activity),
+            configurationChanges.onStart { emit(Unit) },
+        ) { info, _ -> info }
+            // Resolved on every trigger, because the width is read from the
+            // display at that moment rather than carried in the event.
             .map(::resolve)
             .distinctUntilChanged()
 
