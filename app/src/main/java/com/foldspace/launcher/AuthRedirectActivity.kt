@@ -43,10 +43,13 @@ class AuthRedirectActivity : ComponentActivity() {
         lifecycleScope.launch {
             val clientId = container.settings.settings.value.microsoftClientId
             val failure = container.microsoft.completeSignIn(clientId, redirect)
+            // A failure also stays on the Microsoft card, which is where the
+            // user will actually read it — a toast is a two-second glimpse of
+            // something that needs a settings change to fix.
             Toast.makeText(
                 this@AuthRedirectActivity,
                 failure ?: "已連結 Microsoft 帳戶",
-                Toast.LENGTH_SHORT,
+                if (failure == null) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
             ).show()
             finish()
         }

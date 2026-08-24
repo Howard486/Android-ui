@@ -87,10 +87,13 @@ data class GridSpec(val columns: Int, val rows: Int) {
             choice: GridChoice = GridChoice.Ios,
         ): GridSpec = when {
             surface == HomeSurface.Simple -> Simple
-            // A strip, not a page: it sits inside the work page above the
-            // items, and a full-height grid there would push them off screen.
+            // A strip, not a page: it sits inside the summary page and the
+            // page scrolls, so its height follows what is in it rather than a
+            // screen. The row count here is a ceiling on how tall one widget
+            // may be made, not a box the strip is drawn into — three was that
+            // box, and it was why a widget could not be dragged any taller.
             surface == HomeSurface.Work ->
-                GridSpec(columns = if (posture == Posture.Unfolded) 6 else 4, rows = 3)
+                GridSpec(columns = if (posture == Posture.Unfolded) 6 else 4, rows = 8)
             posture == Posture.Unfolded ->
                 GridSpec(choice.unfoldedColumns, choice.unfoldedRows)
 
@@ -426,6 +429,22 @@ data class HomeLayout(
             if (space == SpaceId.Simple) null else PageKind.Hub
     }
 }
+
+/**
+ * How many rows the work strip occupies.
+ *
+ * Pure because the strip has now been drawn at the wrong height twice, and
+ * both times the only way to notice was to look at a phone. The number is the
+ * lowest occupied row — *not* the tallest span, which is what it used to be:
+ * a one-row widget sitting on row 2 needs three rows of strip, and asking for
+ * one is how a widget ends up drawn outside its own box.
+ *
+ * [bottoms] is `cellY + spanY` per item. Capped by [maxRows] so a stored row
+ * from a wider posture cannot stretch the strip past what a widget is allowed
+ * to be.
+ */
+fun stripRows(bottoms: List<Int>, maxRows: Int): Int =
+    bottoms.maxOrNull()?.coerceIn(1, maxRows.coerceAtLeast(1)) ?: 1
 
 /**
  * How large an icon should be drawn inside a cell it may span.

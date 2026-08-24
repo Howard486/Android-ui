@@ -1235,6 +1235,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun beginMicrosoftSignIn() = viewModelScope.launch {
         val clientId = container.settings.settings.value.microsoftClientId
         if (!container.microsoft.beginSignIn(clientId)) {
+            // Put it on the card as well as in a toast. The card is what the
+            // user is looking at, and it is what stays there.
+            _microsoft.value = MicrosoftState.NotConfigured
             _transientMessage.value = "還沒有設定 Microsoft 用戶端 ID"
         }
     }
@@ -1245,6 +1248,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setMicrosoftClientId(clientId: String?) = viewModelScope.launch {
+        // A new id deserves a clean slate; the old id's rejection says nothing
+        // about this one.
+        container.microsoft.clearError()
         container.settings.setMicrosoftClientId(clientId)
         refreshMicrosoft()
     }

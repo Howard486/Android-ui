@@ -27,6 +27,8 @@ import com.foldspace.launcher.ui.widgets.WidgetCell
 import com.foldspace.launcher.ui.home.CellGridLayout
 import com.foldspace.launcher.home.HomeLayout
 import com.foldspace.launcher.home.HomeItem
+import com.foldspace.launcher.home.GridSpec
+import com.foldspace.launcher.home.stripRows
 import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
@@ -113,7 +115,43 @@ fun WorkItemsPage(
     ) {
         Spacer(Modifier.height(12.dp))
 
+        // The calendar leads. It is the one thing on this page that is true
+        // without any account, any permission beyond the calendar itself, and
+        // any setup — and it is what you actually want to see when you look at
+        // a summary. Everything below it is context for it.
+        AgendaSection(
+            agenda = agenda,
+            timeLabelFor = timeLabelFor,
+            hasAccess = hasCalendarAccess,
+            onRequestAccess = onRequestCalendarAccess,
+            onJoin = onJoinMeeting,
+            titlesVisible = titlesVisible,
+            onToggleTitles = onToggleTitles,
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        WorkWidgets(
+            layout = widgets,
+            widgetHost = widgetHost,
+            onAdd = onAddWidget,
+            onRemove = onRemoveWidget,
+            onResize = onResizeWidget,
+            onMove = onMoveWidget,
+        )
+
+        Spacer(Modifier.height(12.dp))
+
         header?.invoke(this)
+
+        MicrosoftSection(
+            state = microsoft,
+            onSignIn = onMicrosoftSignIn,
+            onSignOut = onMicrosoftSignOut,
+            onConfigure = onConfigureMicrosoft,
+        )
+
+        Spacer(Modifier.height(16.dp))
 
         Row(
             Modifier.fillMaxWidth(),
@@ -129,38 +167,6 @@ fun WorkItemsPage(
                 Pill(text = "${state.needsAction} 項待處理", color = tokens.accent)
             }
         }
-
-        Spacer(Modifier.height(12.dp))
-
-        WorkWidgets(
-            layout = widgets,
-            widgetHost = widgetHost,
-            onAdd = onAddWidget,
-            onRemove = onRemoveWidget,
-            onResize = onResizeWidget,
-            onMove = onMoveWidget,
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        AgendaSection(
-            agenda = agenda,
-            timeLabelFor = timeLabelFor,
-            hasAccess = hasCalendarAccess,
-            onRequestAccess = onRequestCalendarAccess,
-            onJoin = onJoinMeeting,
-            titlesVisible = titlesVisible,
-            onToggleTitles = onToggleTitles,
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        MicrosoftSection(
-            state = microsoft,
-            onSignIn = onMicrosoftSignIn,
-            onSignOut = onMicrosoftSignOut,
-            onConfigure = onConfigureMicrosoft,
-        )
 
         Spacer(Modifier.height(12.dp))
 
@@ -239,6 +245,26 @@ fun WorkItemsPage(
         }
         Spacer(Modifier.height(24.dp))
     }
+}
+
+/**
+ * What still works when there is no Azure app registration.
+ *
+ * Worth saying next to every dead end, because there is one and it is the one
+ * this user is actually on: the agenda above reads the device's own calendar
+ * with no account at all, and Outlook's and Teams' own widgets show their real
+ * data with their own sign-in. Leaving that unsaid would make a card that
+ * cannot work look like the only way in.
+ */
+@Composable
+private fun NoRegistrationRoute() {
+    Text(
+        text = "不做註冊也可以：上面的「今天」讀的是這台裝置的行事曆（Outlook 只要開啟" +
+            "「同步日曆」就會寫進去），而 Outlook 和 Teams 自己的小工具會用它們自己的" +
+            "登入顯示真實資料。這一張卡片只是額外的路。",
+        style = MaterialTheme.typography.labelSmall,
+        color = FoldSpaceTheme.tokens.textMuted,
+    )
 }
 
 /**
@@ -337,19 +363,30 @@ private fun MicrosoftSection(
                 )
                 MicrosoftState.SignedOut -> TextAction(text = "連結帳戶", onClick = onSignIn)
                 MicrosoftState.NotConfigured -> TextAction(text = "設定", onClick = onConfigure)
+                is MicrosoftState.Failed -> Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextAction(text = "設定", onClick = onConfigure, color = tokens.textSecondary)
+                    TextAction(text = "再試一次", onClick = onSignIn)
+                }
                 else -> Unit
             }
         }
 
         when (state) {
-            MicrosoftState.NotConfigured -> Text(
-                // The one thing I cannot do for the user, said plainly.
-                text = "還沒有用戶端 ID。連到 Microsoft 需要一組 Azure 應用程式註冊，" +
-                    "而那要用你自己的 Microsoft 帳戶到 Azure 入口網站建立 —— FoldSpace " +
-                    "沒有辦法代勞。在設定裡貼上 ID 之後這裡就會運作。",
-                style = MaterialTheme.typography.bodySmall,
-                color = tokens.textSecondary,
-            )
+            MicrosoftState.NotConfigured -> Column {
+                Text(
+                    // The one thing I cannot do for the user, said plainly.
+                    text = "還沒有用戶端 ID。連到 Microsoft 需要一組 Azure 應用程式註冊，" +
+                        "而那要用你自己的 Microsoft 帳戶到 Azure 入口網站建立 —— FoldSpace " +
+                        "沒有辦法代勞。在設定裡貼上 ID 之後這裡就會運作。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                )
+                Spacer(Modifier.height(6.dp))
+                NoRegistrationRoute()
+            }
 
             MicrosoftState.SignedOut -> Text(
                 text = "連結後會顯示今天的行事曆與未完成的待辦。只讀取，不會修改任何東西，" +
@@ -364,11 +401,15 @@ private fun MicrosoftSection(
                 color = tokens.textMuted,
             )
 
-            is MicrosoftState.Failed -> Text(
-                text = state.reason,
-                style = MaterialTheme.typography.bodySmall,
-                color = tokens.textMuted,
-            )
+            is MicrosoftState.Failed -> Column {
+                Text(
+                    text = state.reason,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                )
+                Spacer(Modifier.height(6.dp))
+                NoRegistrationRoute()
+            }
 
             is MicrosoftState.Ready -> {
                 Spacer(Modifier.height(8.dp))
@@ -716,19 +757,27 @@ private fun WorkWidgets(
 
         // No card around the widgets. Wrapped in a FoldCard they were inset by
         // the card's padding on top of the page's own, and a widget drawn two
-        // margins in is a widget rendering itself smaller than it needs to be
-        // — which is exactly what it looked like.
-        val rows = items
-            .maxOfOrNull { spanOf(it).second }
-            ?.coerceIn(1, layout.grid.rows)
-            ?: 1
+        // margins in is a widget rendering itself smaller than it needs to be.
+        //
+        // The strip is measured on the rows actually occupied, and — this is
+        // the part that was wrong — it is *laid out* on those same rows. It
+        // used to be given a box one row tall and a grid three rows tall, so
+        // CellGridLayout divided that box into three and a one-row widget was
+        // drawn at a third of its height. That is the "被限制在框框裡、畫面
+        // 更小" this page has had since the strip existed; removing the card
+        // did not touch it.
+        val rowsInUse = stripRows(
+            bottoms = items.map { it.cellY + spanOf(it).second },
+            maxRows = layout.grid.rows,
+        )
+        val stripGrid = GridSpec(columns = layout.grid.columns, rows = rowsInUse)
 
-        BoxWithConstraints(Modifier.fillMaxWidth().height((STRIP_ROW_DP * rows).dp)) {
-            val cellWidthPx = with(density) { maxWidth.toPx() } / layout.grid.columns
+        BoxWithConstraints(Modifier.fillMaxWidth().height((STRIP_ROW_DP * rowsInUse).dp)) {
+            val cellWidthPx = with(density) { maxWidth.toPx() } / stripGrid.columns
             val cellHeightPx = with(density) { STRIP_ROW_DP.dp.toPx() }
-            val cellWidthDp = (maxWidth.value / layout.grid.columns).toInt()
+            val cellWidthDp = (maxWidth.value / stripGrid.columns).toInt()
 
-            CellGridLayout(grid = layout.grid, modifier = Modifier.fillMaxSize()) {
+            CellGridLayout(grid = stripGrid, modifier = Modifier.fillMaxSize()) {
                 items.forEach { item ->
                     val (spanX, spanY) = spanOf(item)
                     Box(
@@ -774,8 +823,15 @@ private fun WorkWidgets(
                                 onMoveBy = { stepX, stepY ->
                                     val targetX = (item.cellX + stepX)
                                         .coerceIn(0, layout.grid.columns - spanX)
+                                    // Downwards it may add one row at a time.
+                                    // Letting it jump to the grid's last row
+                                    // would stretch the strip to eight rows
+                                    // with seven of them empty above it.
+                                    val lowest = rowsInUse
+                                        .coerceAtMost(layout.grid.rows - spanY)
+                                        .coerceAtLeast(0)
                                     val targetY = (item.cellY + stepY)
-                                        .coerceIn(0, layout.grid.rows - spanY)
+                                        .coerceIn(0, lowest)
                                     val moved = targetX != item.cellX || targetY != item.cellY
                                     val fits = layout.rectFits(
                                         pageIndex = 0,

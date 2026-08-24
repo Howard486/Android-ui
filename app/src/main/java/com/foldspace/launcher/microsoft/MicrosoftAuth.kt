@@ -131,6 +131,41 @@ object MicrosoftAuth {
         return decode(error).takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Turns an OAuth error code into something a person can act on.
+     *
+     * `invalid_request` in a toast is not a message, it is a status line — and
+     * it is the code this flow hits most, because it is what Microsoft returns
+     * when the redirect URI is not registered. Every branch here names the
+     * setting to go and change.
+     */
+    fun explain(error: String?): String = when (error?.trim()?.lowercase()) {
+        null, "" -> "登入沒有完成。"
+
+        "invalid_request" ->
+            "Microsoft 拒絕了這次要求（invalid_request）。最常見的兩個原因：用戶端 ID " +
+                "不是一個有效的應用程式註冊，或那個註冊裡沒有把重新導向 URI " +
+                "$REDIRECT_URI 加在「行動裝置與桌面應用程式」底下。"
+
+        "unauthorized_client" ->
+            "這組用戶端 ID 不允許用公用用戶端流程登入。到 Azure 的「驗證」頁，把" +
+                "「允許公用用戶端流程」改成「是」。"
+
+        "invalid_client" -> "找不到這組用戶端 ID，或它屬於別的租用戶。"
+
+        "access_denied" -> "授權被取消，或系統管理員不允許這個應用程式存取。"
+
+        "consent_required", "interaction_required", "login_required" ->
+            "需要重新登入或重新同意授權，再連結一次。"
+
+        "unsupported_response_type" -> "這個註冊不接受授權碼流程。"
+
+        "server_error", "temporarily_unavailable" ->
+            "Microsoft 那邊暫時無法處理，稍後再試。"
+
+        else -> "Microsoft 回報錯誤：$error"
+    }
+
     fun tokenRequestBody(clientId: String, code: String, verifier: String): String = listOf(
         "client_id" to clientId,
         "grant_type" to "authorization_code",

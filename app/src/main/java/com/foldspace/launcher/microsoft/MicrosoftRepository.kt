@@ -53,9 +53,29 @@ class MicrosoftRepository(
 
     private var pendingRequest: AuthRequest? = null
 
+    /**
+     * Why the last sign-in did not work.
+     *
+     * Held here rather than shown once in a toast. The browser hands control
+     * back to a throwaway activity, so a toast is the only thing the old code
+     * could show — and "invalid_request" flashing over the dock for two seconds
+     * told the user nothing and left the card still saying 連結帳戶, as though
+     * nothing had happened.
+     */
+    @Volatile
+    var lastError: String? = null
+        private set
+
+    fun clearError() {
+        lastError = null
+    }
+
     /** Starts sign-in in a browser. Returns false when there is no client id. */
     fun beginSignIn(clientId: String?): Boolean {
         val id = clientId?.trim()?.takeIf { it.isNotBlank() } ?: return false
+        // A retry starts clean, or the previous reason would sit on the card
+        // through a sign-in that is still in the browser.
+        lastError = null
         val request = MicrosoftAuth.buildRequest(id)
         pendingRequest = request
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(request.authorizeUrl))
@@ -71,24 +91,33 @@ class MicrosoftRepository(
      * could have its own authorization code exchanged here.
      */
     suspend fun completeSignIn(clientId: String?, redirect: String): String? {
-        val id = clientId?.trim()?.takeIf { it.isNotBlank() } ?: return "尚未設定用戶端 ID"
-        val request = pendingRequest ?: return "沒有進行中的登入"
+        val failure = attemptSignIn(clientId, redirect)
+        lastError = failure
+        return failure
+    }
+
+    private suspend fun attemptSignIn(clientId: String?, redirect: String): String? {
+        val id = clientId?.trim()?.takeIf { it.isNotBlank() } ?: return "尚未設定用戶端 ID。"
+        val request = pendingRequest ?: return "沒有進行中的登入。"
         pendingRequest = null
 
-        MicrosoftAuth.errorFromRedirect(redirect)?.let { return it }
+        MicrosoftAuth.errorFromRedirect(redirect)?.let { return MicrosoftAuth.explain(it) }
         val code = MicrosoftAuth.codeFromRedirect(redirect, request.state)
-            ?: return "登入回應無法驗證"
+            ?: return "登入回應無法驗證，已忽略。"
 
         val body = MicrosoftAuth.tokenRequestBody(id, code, request.codeVerifier)
         val response = withContext(Dispatchers.IO) { post(MicrosoftAuth.TOKEN_ENDPOINT, body) }
-            ?: return "無法連線到 Microsoft"
+            ?: return "無法連線到 Microsoft。"
 
-        val parsed = parseTokens(response) ?: return "Microsoft 沒有回傳權杖"
+        val parsed = parseTokens(response) ?: return "Microsoft 沒有回傳權杖。"
         tokens.write(parsed)
         return null
     }
 
-    suspend fun signOut() = tokens.clear()
+    suspend fun signOut() {
+        lastError = null
+        tokens.clear()
+    }
 
     suspend fun isSignedIn(): Boolean = tokens.read()?.refreshToken != null
 
@@ -96,7 +125,11 @@ class MicrosoftRepository(
     suspend fun load(clientId: String?): MicrosoftState {
         val id = clientId?.trim()?.takeIf { it.isNotBlank() }
             ?: return MicrosoftState.NotConfigured
-        val access = accessToken(id) ?: return MicrosoftState.SignedOut
+        // A failed attempt outranks "signed out": the difference between
+        // "you have not connected an account" and "connecting failed, and
+        // here is why" is the whole of what the user needs to know.
+        val access = accessToken(id)
+            ?: return lastError?.let(MicrosoftState::Failed) ?: MicrosoftState.SignedOut
 
         return withContext(Dispatchers.IO) {
             val events = get(calendarUrl(), access)?.let(GraphModels::events).orEmpty()
