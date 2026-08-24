@@ -17,6 +17,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -80,6 +82,10 @@ fun NotificationCenter(
             return@Column
         }
 
+        // Which quiet tiers the user opened, this visit only. A decision to
+        // read the noise once is not a preference.
+        val expanded = remember { mutableStateListOf<NotificationTier>() }
+
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 24.dp),
@@ -88,14 +94,40 @@ fun NotificationCenter(
                 val items = visible.filter { it.tier == tier }
                 if (items.isEmpty()) return@forEach
 
+                val quiet = tier == NotificationTier.Info || tier == NotificationTier.Noise
+                val open = tier in expanded
+
                 item(key = "header-${tier.name}") {
-                    Text(
-                        text = "${tier.displayName} · ${items.size}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = tier.tint(tokens),
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = quiet) {
+                                if (open) expanded.remove(tier) else expanded.add(tier)
+                            }
+                            .padding(top = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = "${tier.displayName} · ${items.size}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = tier.tint(tokens),
+                        )
+                        // The quiet tiers start closed. Info and Noise are, by
+                        // their own definition, the ones you do not need to
+                        // read — leaving eighty of them open above the four
+                        // that matter is what makes a notification list
+                        // useless.
+                        if (quiet) {
+                            Text(
+                                text = if (open) "收起" else "展開",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = tokens.accent,
+                            )
+                        }
+                    }
                 }
+
+                if (quiet && !open) return@forEach
                 items(items, key = { it.key }) { item ->
                     NotificationRow(item)
                 }

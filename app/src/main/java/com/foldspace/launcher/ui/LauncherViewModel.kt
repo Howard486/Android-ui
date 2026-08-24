@@ -127,6 +127,22 @@ data class LauncherUiState(
         get() = effectiveMotion(tokens, settings.powerMode, powerSaveActive)
 
     /**
+     * The apps this person actually opens, most first.
+     *
+     * From the usage scores the context engine already collects for the dock,
+     * so it costs nothing new. Shown when the search box is empty: typing four
+     * characters to reach the same app every time is the thing a launcher is
+     * supposed to save you.
+     */
+    fun frequentApps(limit: Int = 8): List<AppEntry> = apps
+        .asSequence()
+        .filter { it.profile != ProfileType.Private }
+        .filter { (usageScores[it.packageName] ?: 0f) > 0f }
+        .sortedByDescending { usageScores[it.packageName] ?: 0f }
+        .take(limit)
+        .toList()
+
+    /**
      * §5.4 Dynamic Dock: fixed pins first, then the smart slots filled from
      * usage. Apps already pinned are excluded so a pin never appears twice.
      */
@@ -809,6 +825,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             container.settings.setIconOverride(IconOverride(appKey, label, iconUri))
         }
 
+    fun setAgendaTitlesVisible(visible: Boolean) = viewModelScope.launch {
+        container.settings.setAgendaTitlesVisible(visible)
+    }
+
     fun setBadgeStyle(style: BadgeStyle) = viewModelScope.launch {
         container.settings.setBadgeStyle(style)
     }
@@ -923,6 +943,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
      * services has been closed. The app shows its own data with its own
      * sign-in, and FoldSpace holds the frame.
      */
+    /**
+     * Moves a widget within the work strip.
+     *
+     * A separate entry point from [moveItem] only because the strip is always
+     * one page: there is no page to choose and no cross-page drop to handle.
+     */
+    fun moveWorkWidget(item: HomeItem, cellX: Int, cellY: Int) = viewModelScope.launch {
+        container.homeLayout.moveItem(item.id, pageIndex = 0, cellX = cellX, cellY = cellY)
+    }
+
     fun addWorkWidget() {
         pendingWidgetSurface = HomeSurface.Work
         pendingWidgetCell = null
@@ -1149,6 +1179,26 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             fromIndex = fromPage.index,
             toIndex = toPage.index,
         )
+    }
+
+    /**
+     * Copies this posture's arrangement onto the other one.
+     *
+     * Reports what happened rather than redrawing silently: it overwrites the
+     * other posture, and the user cannot see that screen while asking for it.
+     */
+    fun copyLayoutToOtherPosture() = viewModelScope.launch {
+        val here = currentPosture()
+        val there = if (here == Posture.Folded) Posture.Unfolded else Posture.Folded
+        container.homeLayout.copyPosture(
+            surface = HomeSurface.of(state.value.space),
+            from = here,
+            to = there,
+            choice = gridChoice.value,
+        )
+        _transientMessage.value =
+            if (there == Posture.Unfolded) "已複製到展開版面（不含小工具）"
+            else "已複製到摺疊版面（不含小工具）"
     }
 
     fun addPage() = viewModelScope.launch {

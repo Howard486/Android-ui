@@ -16,6 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import com.foldspace.launcher.ui.home.ItemEditFrame
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.BoxWithConstraints
 import com.foldspace.launcher.widgets.WidgetHostController
 import com.foldspace.launcher.ui.home.gridCell
 import com.foldspace.launcher.ui.widgets.WidgetCell
@@ -30,6 +34,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
 import com.foldspace.launcher.calendar.collapsedLabel
+import com.foldspace.launcher.calendar.AgendaEvent
 import com.foldspace.launcher.calendar.AgendaSummary
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateListOf
@@ -68,10 +73,14 @@ fun WorkItemsPage(
     widgetHost: WidgetHostController?,
     onAddWidget: () -> Unit,
     onRemoveWidget: (HomeItem) -> Unit,
+    onResizeWidget: (HomeItem, Int, Int) -> Unit,
+    onMoveWidget: (HomeItem, Int, Int) -> Unit,
     agenda: AgendaSummary,
     timeLabelFor: (Long) -> String,
     hasCalendarAccess: Boolean,
     onRequestCalendarAccess: () -> Unit,
+    titlesVisible: Boolean,
+    onToggleTitles: (Boolean) -> Unit,
     microsoft: MicrosoftState,
     onJoinMeeting: (String) -> Unit,
     onMicrosoftSignIn: () -> Unit,
@@ -117,6 +126,8 @@ fun WorkItemsPage(
             widgetHost = widgetHost,
             onAdd = onAddWidget,
             onRemove = onRemoveWidget,
+            onResize = onResizeWidget,
+            onMove = onMoveWidget,
         )
 
         Spacer(Modifier.height(12.dp))
@@ -127,6 +138,8 @@ fun WorkItemsPage(
             hasAccess = hasCalendarAccess,
             onRequestAccess = onRequestCalendarAccess,
             onJoin = onJoinMeeting,
+            titlesVisible = titlesVisible,
+            onToggleTitles = onToggleTitles,
         )
 
         Spacer(Modifier.height(12.dp))
@@ -449,6 +462,8 @@ private fun AgendaSection(
     hasAccess: Boolean,
     onRequestAccess: () -> Unit,
     onJoin: (String) -> Unit,
+    titlesVisible: Boolean,
+    onToggleTitles: (Boolean) -> Unit,
 ) {
     val tokens = FoldSpaceTheme.tokens
     // Which rows the user has opened, this composition only. Deliberately not
@@ -467,8 +482,20 @@ private fun AgendaSection(
                 style = MaterialTheme.typography.titleMedium,
                 color = tokens.textPrimary,
             )
-            if (hasAccess && agenda.remaining > 0) {
-                Pill(text = "還有 ${agenda.remaining} 個", color = tokens.accent)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (hasAccess && agenda.remaining > 0) {
+                    Pill(text = "還有 ${agenda.remaining} 個", color = tokens.accent)
+                }
+                if (hasAccess && !agenda.isEmpty) {
+                    TextAction(
+                        text = if (titlesVisible) "隱藏內容" else "顯示內容",
+                        onClick = { onToggleTitles(!titlesVisible) },
+                        color = tokens.textSecondary,
+                    )
+                }
             }
         }
 
@@ -488,8 +515,8 @@ private fun AgendaSection(
         if (agenda.isEmpty) {
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "今天沒有行程。如果 Outlook 的行事曆沒有出現，請到 Outlook 的" +
-                    "帳號設定把「同步日曆」打開 —— 它預設不一定會寫進系統行事曆。",
+                text = "今天和明天都沒有行程。如果 Outlook 的行事曆沒有出現，請到 Outlook " +
+                    "的帳號設定把「同步日曆」打開 —— 它預設不一定會寫進系統行事曆。",
                 style = MaterialTheme.typography.bodySmall,
                 color = tokens.textMuted,
             )
@@ -497,65 +524,105 @@ private fun AgendaSection(
         }
 
         Spacer(Modifier.height(8.dp))
-        agenda.events.forEachIndexed { index, event ->
-            val open = event.id in revealed
-            val isNext = index == agenda.nextIndex
 
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        if (open) revealed.remove(event.id) else revealed.add(event.id)
-                    }
-                    .padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(
-                    text = if (event.allDay) "全天" else timeLabelFor(event.startMillis),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isNext) tokens.accent else tokens.textMuted,
-                )
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = if (open) event.title else event.collapsedLabel(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (open) tokens.textPrimary else tokens.textSecondary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (open) {
-                        event.location?.let {
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = tokens.textMuted,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        event.calendarName?.let {
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = tokens.textMuted,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                }
-                // A Teams meeting is a calendar event with a join link in
-                // it, so this needs no account and no permission beyond the
-                // one already granted.
-                event.joinUrl?.let { url ->
-                    TextAction(text = "加入", onClick = { onJoin(url) })
-                }
-                Text(
-                    text = if (open) "隱藏" else "顯示",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = tokens.accent,
+        if (agenda.events.isEmpty()) {
+            Text(
+                text = "今天沒有行程了",
+                style = MaterialTheme.typography.bodySmall,
+                color = tokens.textMuted,
+            )
+        }
+
+        agenda.events.forEachIndexed { index, event ->
+            AgendaRow(
+                event = event,
+                isNext = index == agenda.nextIndex,
+                timeLabelFor = timeLabelFor,
+                titlesVisible = titlesVisible,
+                revealed = revealed,
+                onJoin = onJoin,
+            )
+        }
+
+        if (agenda.tomorrow.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "明天",
+                style = MaterialTheme.typography.labelSmall,
+                color = tokens.textMuted,
+            )
+            Spacer(Modifier.height(4.dp))
+            agenda.tomorrow.forEach { event ->
+                AgendaRow(
+                    event = event,
+                    isNext = false,
+                    timeLabelFor = timeLabelFor,
+                    titlesVisible = titlesVisible,
+                    revealed = revealed,
+                    onJoin = onJoin,
                 )
             }
+        }
+    }
+}
+
+/**
+ * One entry.
+ *
+ * [titlesVisible] is the preference; [revealed] is a per-row override for the
+ * times it is off and you want to see one anyway. Neither is persisted beyond
+ * the preference itself — opening a single title is a decision about now.
+ */
+@Composable
+private fun AgendaRow(
+    event: AgendaEvent,
+    isNext: Boolean,
+    timeLabelFor: (Long) -> String,
+    titlesVisible: Boolean,
+    revealed: MutableList<Long>,
+    onJoin: (String) -> Unit,
+) {
+    val tokens = FoldSpaceTheme.tokens
+    val open = titlesVisible || event.id in revealed
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable {
+                if (event.id in revealed) revealed.remove(event.id) else revealed.add(event.id)
+            }
+            .padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = if (event.allDay) "全天" else timeLabelFor(event.startMillis),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isNext) tokens.accent else tokens.textMuted,
+        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = if (open) event.title else event.collapsedLabel(),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (open) tokens.textPrimary else tokens.textSecondary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (open) {
+                event.location?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = tokens.textMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        // A Teams meeting is a calendar event with a join link in it, so this
+        // needs no account and no permission beyond the one already granted.
+        event.joinUrl?.let { url ->
+            TextAction(text = "加入", onClick = { onJoin(url) })
         }
     }
 }
@@ -580,12 +647,28 @@ private fun WorkWidgets(
     widgetHost: WidgetHostController?,
     onAdd: () -> Unit,
     onRemove: (HomeItem) -> Unit,
+    onResize: (HomeItem, Int, Int) -> Unit,
+    onMove: (HomeItem, Int, Int) -> Unit,
 ) {
     val tokens = FoldSpaceTheme.tokens
+    val density = LocalDensity.current
     var editing by remember { mutableStateOf(false) }
     val items = layout.pages.firstOrNull()?.items.orEmpty()
 
-    FoldCard(Modifier.fillMaxWidth()) {
+    // The span a handle is being dragged to, so the widget grows under the
+    // finger instead of jumping when the drag ends. Same shape as the grid's.
+    var pendingResize by remember { mutableStateOf<Pair<Long, Pair<Int, Int>>?>(null) }
+    LaunchedEffect(items, pendingResize) {
+        val (id, span) = pendingResize ?: return@LaunchedEffect
+        val current = items.firstOrNull { it.id == id }
+        if (current == null || current.spanX to current.spanY == span) pendingResize = null
+    }
+
+    fun spanOf(item: HomeItem): Pair<Int, Int> =
+        pendingResize?.takeIf { it.first == item.id }?.second
+            ?: (item.spanX.coerceAtLeast(1) to item.spanY.coerceAtLeast(1))
+
+    Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -615,57 +698,86 @@ private fun WorkWidgets(
                 style = MaterialTheme.typography.bodySmall,
                 color = tokens.textMuted,
             )
-            return@FoldCard
+            return@Column
         }
 
         Spacer(Modifier.height(8.dp))
-        // Tall enough for the tallest widget on it, and no taller. A fixed
-        // 240dp cropped a three-row inbox widget halfway through a message;
-        // a strip that grows without limit would push the work items off the
-        // page. The page scrolls now, so the ceiling is the grid's own rows.
+
+        // No card around the widgets. Wrapped in a FoldCard they were inset by
+        // the card's padding on top of the page's own, and a widget drawn two
+        // margins in is a widget rendering itself smaller than it needs to be
+        // — which is exactly what it looked like.
         val rows = items
-            .maxOfOrNull { it.spanY.coerceAtLeast(1) }
+            .maxOfOrNull { spanOf(it).second }
             ?.coerceIn(1, layout.grid.rows)
             ?: 1
-        CellGridLayout(
-            grid = layout.grid,
-            modifier = Modifier.fillMaxWidth().height((STRIP_ROW_DP * rows).dp),
-        ) {
-            items.forEach { item ->
-                Box(
-                    Modifier
-                        .gridCell(
-                            item.cellX,
-                            item.cellY,
-                            item.spanX.coerceAtLeast(1),
-                            item.spanY.coerceAtLeast(1),
-                        )
-                        .padding(2.dp),
-                ) {
-                    val id = item.appWidgetId
-                    if (widgetHost != null && id != null) {
-                        WidgetCell(
-                            controller = widgetHost,
-                            appWidgetId = id,
-                            widthDp = STRIP_CELL_DP * item.spanX.coerceAtLeast(1),
-                            heightDp = STRIP_ROW_DP * item.spanY.coerceAtLeast(1),
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                    if (editing) {
-                        Box(
-                            Modifier
-                                .align(Alignment.TopStart)
-                                .size(24.dp)
-                                .clip(CircleShape)
-                                .background(tokens.surfaceElevated)
-                                .clickable { onRemove(item) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "✕",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = tokens.textPrimary,
+
+        BoxWithConstraints(Modifier.fillMaxWidth().height((STRIP_ROW_DP * rows).dp)) {
+            val cellWidthPx = with(density) { maxWidth.toPx() } / layout.grid.columns
+            val cellHeightPx = with(density) { STRIP_ROW_DP.dp.toPx() }
+            val cellWidthDp = (maxWidth.value / layout.grid.columns).toInt()
+
+            CellGridLayout(grid = layout.grid, modifier = Modifier.fillMaxSize()) {
+                items.forEach { item ->
+                    val (spanX, spanY) = spanOf(item)
+                    Box(
+                        Modifier
+                            .gridCell(item.cellX, item.cellY, spanX, spanY)
+                            .padding(2.dp),
+                    ) {
+                        val id = item.appWidgetId
+                        if (widgetHost != null && id != null) {
+                            WidgetCell(
+                                controller = widgetHost,
+                                appWidgetId = id,
+                                widthDp = cellWidthDp * spanX,
+                                heightDp = STRIP_ROW_DP * spanY,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+
+                        if (editing) {
+                            // The same frame the desktop uses, body drag and
+                            // all: a widget swallows touches, so the frame is
+                            // the only way to reach one at all.
+                            ItemEditFrame(
+                                spanX = spanX,
+                                spanY = spanY,
+                                cellWidthPx = cellWidthPx,
+                                cellHeightPx = cellHeightPx,
+                                onProposeSpan = { wantX, wantY ->
+                                    val fits = layout.rectFits(
+                                        pageIndex = 0,
+                                        item = item,
+                                        cellX = item.cellX,
+                                        cellY = item.cellY,
+                                        spanX = wantX,
+                                        spanY = wantY,
+                                    )
+                                    if (fits) pendingResize = item.id to (wantX to wantY)
+                                },
+                                onCommitSpan = {
+                                    val (x, y) = spanOf(item)
+                                    if (x != item.spanX || y != item.spanY) onResize(item, x, y)
+                                },
+                                onMoveBy = { stepX, stepY ->
+                                    val targetX = (item.cellX + stepX)
+                                        .coerceIn(0, layout.grid.columns - spanX)
+                                    val targetY = (item.cellY + stepY)
+                                        .coerceIn(0, layout.grid.rows - spanY)
+                                    val moved = targetX != item.cellX || targetY != item.cellY
+                                    val fits = layout.rectFits(
+                                        pageIndex = 0,
+                                        item = item,
+                                        cellX = targetX,
+                                        cellY = targetY,
+                                        spanX = spanX,
+                                        spanY = spanY,
+                                    )
+                                    if (moved && fits) onMove(item, targetX, targetY)
+                                },
+                                onRemove = { onRemove(item) },
+                                bodyDraggable = true,
                             )
                         }
                     }
@@ -684,8 +796,6 @@ private fun WorkWidgets(
  */
 private const val STRIP_ROW_DP = 104
 
-/** Nominal cell width handed to the widget host for its size hint. */
-private const val STRIP_CELL_DP = 80
 
 /** Enough to read as deliberate emptiness rather than a truncated page. */
 private val EMPTY_HEIGHT = 160.dp

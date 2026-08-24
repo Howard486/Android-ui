@@ -372,9 +372,6 @@ data class HomeLayout(
         return Triple(nextPage, 0, 0)
     }
 
-    /** The trailing App Library page, which every context gets. */
-    val trailing: PageKind get() = PageKind.Library
-
     companion object {
         fun empty(space: SpaceId, posture: Posture) = HomeLayout(
             space = space,

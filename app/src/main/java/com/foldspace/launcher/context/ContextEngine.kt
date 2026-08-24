@@ -50,6 +50,15 @@ class ContextEngine(
 
     private var switchMode: SwitchMode = SwitchMode.SuggestFirst
 
+    /**
+     * The last suggestion the user turned down. See [SuggestionGate].
+     *
+     * The mechanism already existed for a hand-picked Space — [userOverride]
+     * remembers the fingerprint it was chosen at — and refusing simply never
+     * used it.
+     */
+    private var dismissed: DismissedSuggestion? = null
+
     private var lastFingerprint: ContextFingerprint? = null
     private var lastDecision: ContextDecision = ContextDecision.NoAction
 
@@ -87,10 +96,20 @@ class ContextEngine(
     fun setUserOverride(space: SpaceId?) {
         userOverride = space
         overrideFingerprint = _snapshot.value.fingerprint()
+        // Choosing by hand settles the question; a refusal of the old
+        // suggestion should not then suppress a later, different one.
+        dismissed = null
         _suggestion.value = null
     }
 
     fun dismissSuggestion() {
+        _suggestion.value?.let { current ->
+            dismissed = DismissedSuggestion(
+                space = current.space,
+                fingerprint = _snapshot.value.fingerprint(),
+                atMillis = clock(),
+            )
+        }
         _suggestion.value = null
     }
 
@@ -201,6 +220,13 @@ class ContextEngine(
             _applySpace.tryEmit(space)
             return
         }
+        if (!SuggestionGate.allows(dismissed, space, _snapshot.value.fingerprint(), clock())) {
+            // Turned down, and nothing has changed since. Saying nothing is
+            // the whole point — asking again is what "先不要" was refusing.
+            _suggestion.value = null
+            return
+        }
+
         _suggestion.value = SpaceSuggestion(
             space = space,
             confidence = decision.confidence,

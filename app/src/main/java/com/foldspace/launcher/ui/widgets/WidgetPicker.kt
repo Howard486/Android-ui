@@ -25,6 +25,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.getValue
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,20 +63,52 @@ fun WidgetPicker(
     val context = LocalContext.current
     val packageManager = context.packageManager
 
-    val grouped = remember(providers) {
+    var query by remember { mutableStateOf("") }
+    val trimmed = query.trim().lowercase()
+
+    // App label resolved once per package, not once per row: this list is
+    // every widget on the device, and a PackageManager lookup per frame while
+    // typing is the sort of thing that makes a search field feel broken.
+    val labels = remember(providers) {
+        providers.map { it.provider.packageName }.distinct().associateWith { packageName ->
+            runCatching {
+                packageManager.getApplicationInfo(packageName, 0)
+                    .loadLabel(packageManager)
+                    .toString()
+            }.getOrDefault(packageName)
+        }
+    }
+
+    val widgetLabels = remember(providers) {
+        providers.associateBy({ it.provider.flattenToString() }) { info ->
+            runCatching { info.loadLabel(packageManager) }.getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: info.provider.shortClassName
+        }
+    }
+
+    val grouped = remember(providers, labels, widgetLabels, trimmed) {
         providers
+            // Matching on both the app's name and the widget's: people look
+            // for "Outlook" and for "行事曆", and which one they remember
+            // depends on the widget.
+            .filter { info ->
+                if (trimmed.isEmpty()) return@filter true
+                val app = labels[info.provider.packageName].orEmpty().lowercase()
+                val widget = widgetLabels[info.provider.flattenToString()].orEmpty().lowercase()
+                trimmed in app || trimmed in widget ||
+                    trimmed in info.provider.packageName.lowercase()
+            }
             .groupBy { it.provider.packageName }
             .toList()
-            .sortedBy { (packageName, _) ->
-                runCatching {
-                    packageManager
-                        .getApplicationInfo(packageName, 0)
-                        .loadLabel(packageManager)
-                        .toString()
-                        .lowercase()
-                }.getOrDefault(packageName)
-            }
+            .sortedBy { (packageName, _) -> labels[packageName].orEmpty().lowercase() }
     }
+
+    // Which app sections are open. Everything starts closed when there are
+    // many, because a device has dozens of widgets and an open list of all of
+    // them is a wall — but a search that matched a handful should show them.
+    val collapsedByDefault = trimmed.isEmpty() && grouped.size > AUTO_EXPAND_LIMIT
+    val opened = remember { mutableStateListOf<String>() }
 
     Column(
         modifier
@@ -98,11 +136,14 @@ fun WidgetPicker(
             )
         }
         Spacer(Modifier.height(12.dp))
+        PickerSearchField(query = query, onQueryChange = { query = it })
+        Spacer(Modifier.height(12.dp))
 
         if (grouped.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "這台裝置沒有可用的小工具",
+                    text = if (trimmed.isEmpty()) "這台裝置沒有可用的小工具"
+                    else "找不到「$query」",
                     style = MaterialTheme.typography.bodyMedium,
                     color = tokens.textMuted,
                 )
@@ -115,30 +156,36 @@ fun WidgetPicker(
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
             grouped.forEach { (packageName, infos) ->
+                val open = if (collapsedByDefault) packageName in opened else true
+
                 item(key = "header-$packageName") {
-                    val appLabel = remember(packageName) {
-                        runCatching {
-                            packageManager
-                                .getApplicationInfo(packageName, 0)
-                                .loadLabel(packageManager)
-                                .toString()
-                        }.getOrDefault(packageName)
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = collapsedByDefault) {
+                                if (packageName in opened) opened.remove(packageName)
+                                else opened.add(packageName)
+                            }
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = labels[packageName].orEmpty(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = tokens.textMuted,
+                        )
+                        Text(
+                            text = if (collapsedByDefault && !open) "${infos.size} 個" else "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = tokens.accent,
+                        )
                     }
-                    Text(
-                        text = appLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = tokens.textMuted,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
                 }
 
+                if (!open) return@forEach
+
                 items(infos, key = { it.provider.flattenToString() }) { info ->
-                    val label = remember(info) {
-                        runCatching { info.loadLabel(packageManager) }
-                            .getOrNull()
-                            ?.takeIf { it.isNotBlank() }
-                            ?: info.provider.shortClassName
-                    }
+                    val label = widgetLabels[info.provider.flattenToString()].orEmpty()
                     // A provider's own preview, falling back to its icon. A
                     // list of names alone was unreadable: nobody picks a widget
                     // by its class name, they pick it by what it looks like.
@@ -220,3 +267,37 @@ private fun Drawable.toImageBitmapOrNull(maxPx: Int): ImageBitmap? = runCatching
 
 /** Long-edge cap for a decoded preview. */
 private const val PREVIEW_MAX_PX = 640
+
+@Composable
+private fun PickerSearchField(query: String, onQueryChange: (String) -> Unit) {
+    val tokens = FoldSpaceTheme.tokens
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(tokens.cardRadius))
+            .background(tokens.surfaceElevated)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = tokens.textPrimary),
+            cursorBrush = SolidColor(tokens.accent),
+            modifier = Modifier.fillMaxWidth(),
+            decorationBox = { inner ->
+                if (query.isEmpty()) {
+                    Text(
+                        text = "搜尋 App 或小工具名稱",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = tokens.textMuted,
+                    )
+                }
+                inner()
+            },
+        )
+    }
+}
+
+/** Above this many apps the list opens closed, or it is a wall of names. */
+private const val AUTO_EXPAND_LIMIT = 6

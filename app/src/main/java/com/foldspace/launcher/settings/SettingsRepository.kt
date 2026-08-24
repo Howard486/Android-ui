@@ -161,6 +161,15 @@ data class FoldSpaceSettings(
      * what is missing rather than failing in some other way.
      */
     val microsoftClientId: String? = null,
+    /**
+     * Whether the agenda shows event titles without being asked.
+     *
+     * On by default now. I chose the other way round first — a home screen is
+     * visible to whoever is standing next to you — but a calendar you have to
+     * tap twice to read is a calendar you stop looking at, and that trade is
+     * the user's to make, not mine.
+     */
+    val agendaTitlesVisible: Boolean = true,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "foldspace")
@@ -328,6 +337,9 @@ class SettingsRepository(
         else prefs[Keys.MicrosoftClientId] = trimmed
     }
 
+    suspend fun setAgendaTitlesVisible(visible: Boolean) =
+        edit { it[Keys.AgendaTitles] = visible }
+
     suspend fun setBadgeStyle(style: BadgeStyle) = edit { it[Keys.BadgeStyle] = style.key }
 
     suspend fun setDesktopModeOnUnfold(enabled: Boolean) =
@@ -393,6 +405,7 @@ class SettingsRepository(
         iconOverrides = IconOverrideCodec.decodeAll(prefs[Keys.IconOverrides].orEmpty()),
         lockedApps = prefs[Keys.LockedApps].orEmpty(),
         microsoftClientId = prefs[Keys.MicrosoftClientId]?.takeIf { it.isNotBlank() },
+        agendaTitlesVisible = prefs[Keys.AgendaTitles] ?: true,
         // Clamped on the way out as well as in: a value written by an older
         // build, or by a restored backup, must not produce a dock with zero
         // rows and no way back to the settings screen.
@@ -424,6 +437,7 @@ class SettingsRepository(
         val IconOverrides = stringSetPreferencesKey("icon_overrides")
         val LockedApps = stringSetPreferencesKey("locked_apps")
         val MicrosoftClientId = stringPreferencesKey("microsoft_client_id")
+        val AgendaTitles = booleanPreferencesKey("agenda_titles_visible")
         val DockRows = intPreferencesKey("dock_rows")
         val DockColumns = intPreferencesKey("dock_columns")
 

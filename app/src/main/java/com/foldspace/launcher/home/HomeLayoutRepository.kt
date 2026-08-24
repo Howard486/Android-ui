@@ -211,6 +211,54 @@ class HomeLayoutRepository(
         }
     }
 
+    /**
+     * Overwrites one posture's arrangement with the other's.
+     *
+     * [seedPostureFrom] runs once, the first time the device is opened, and
+     * then the two diverge for good — so a desktop tidied on the cover screen
+     * is invisible on the inner one for ever. This is the deliberate version
+     * of that copy, run when the user asks.
+     *
+     * Destructive by nature: the target's arrangement is replaced, not merged,
+     * because merging two grids of different shapes has no answer anyone would
+     * recognise as theirs. Widgets are dropped rather than copied — an
+     * appWidgetId binds one host to one provider instance, and the same id in
+     * two postures is one widget in two places.
+     */
+    suspend fun copyPosture(
+        surface: HomeSurface,
+        from: Posture,
+        to: Posture,
+        choice: GridChoice,
+    ) {
+        if (from == to) return
+        val source = dao.getLayout(surface.key, from.key)
+            .filter { it.container == HomeItemEntity.CONTAINER_DESKTOP }
+            .filter { it.itemType != "widget" }
+        if (source.isEmpty()) return
+
+        val targetGrid = GridSpec.of(surface, to, choice)
+        val slots = GridPacker.pack(
+            source.map { it.spanX.coerceAtLeast(1) to it.spanY.coerceAtLeast(1) },
+            targetGrid,
+        )
+
+        val copied = source.mapIndexed { index, row ->
+            val slot = slots[index]
+            row.copy(
+                id = 0,
+                postureKey = to.key,
+                pageIndex = slot.pageIndex,
+                cellX = slot.cellX,
+                cellY = slot.cellY,
+            )
+        }
+        // Folder members would need their container remapped to the new ids,
+        // which the copy cannot know in advance; dropping them means a folder
+        // arrives empty rather than pointing at the wrong posture's rows.
+        dao.replaceLayout(surface.key, to.key, copied.filter { it.itemType != "folder" })
+    }
+
     suspend fun setSimpleApps(apps: List<AppEntry>) {
         val grid = GridSpec.Simple
         val entities = apps.take(grid.cellsPerPage).mapIndexed { index, app ->

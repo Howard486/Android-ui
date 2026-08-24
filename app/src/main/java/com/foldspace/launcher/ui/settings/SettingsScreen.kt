@@ -61,6 +61,7 @@ fun SettingsScreen(
     onSetDockShape: (DockShape) -> Unit,
     onSetDesktopModeOnUnfold: (Boolean) -> Unit,
     onSetMicrosoftClientId: (String?) -> Unit,
+    onCopyPosture: () -> Unit,
     onExportLayout: () -> Unit,
     onImportLayout: () -> Unit,
     onRequestCalendarAccess: () -> Unit,
@@ -350,6 +351,33 @@ fun SettingsScreen(
                 )
                 Spacer(Modifier.height(14.dp))
                 TextAction(text = "選擇要隱藏的 App", onClick = onPickHiddenApps)
+            }
+        }
+
+        item {
+            FoldCard(Modifier.fillMaxWidth()) {
+                Text(
+                    text = "複製版面到另一個姿態",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = tokens.textPrimary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "摺疊和展開各有一份排列，第一次展開時複製一次之後就再也不同步 —— " +
+                        "所以在外螢幕整理過的版面，內螢幕永遠看不到。這個動作會用目前這一面的" +
+                        "排列覆蓋另一面，並重新排進那一面的格線。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.textSecondary,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "會覆蓋，不是合併。小工具不會複製 —— 一個 appWidgetId 綁定的是這台" +
+                        "裝置的一個實例，複製過去等於同一個小工具出現在兩個地方。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tokens.textMuted,
+                )
+                Spacer(Modifier.height(14.dp))
+                TextAction(text = "複製過去", onClick = onCopyPosture)
             }
         }
 

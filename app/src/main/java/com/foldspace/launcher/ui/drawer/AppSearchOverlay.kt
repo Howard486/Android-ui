@@ -66,6 +66,14 @@ fun AppSearchOverlay(
     suggested: List<AppEntry>,
     onLaunch: (AppEntry) -> Unit,
     onLongPress: (AppEntry) -> Unit,
+    /**
+     * Whether an empty query lists everything.
+     *
+     * False for the swipe-up gesture, which is a search box. True for desktop
+     * mode's Start button, which is where every app lives now that the App
+     * Library is gone.
+     */
+    listAllWhenEmpty: Boolean = false,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     density: SpaceDensity = SpaceDensity.Standard,
@@ -94,7 +102,9 @@ fun AppSearchOverlay(
             .filter { tab.profile == null || it.profile == tab.profile }
 
         when {
-            trimmedQuery.isEmpty() -> emptyList()
+            // From Start, an empty box means "show me everything", A-Z.
+            trimmedQuery.isEmpty() ->
+                if (listAllWhenEmpty) scoped.sortedBy { it.searchLabel }.toList() else emptyList()
 
             // A run of digits is read as a keypad query first and as literal
             // text second, so "365" still finds Office 365 while 4663 finds
@@ -157,10 +167,11 @@ fun AppSearchOverlay(
             Spacer(Modifier.height(12.dp))
         }
 
-        // §5.3 "Suggested apps" — hidden while searching, where it would just
-        // push the results the user is aiming at further down.
+        // The apps this person actually opens, from the usage scores the
+        // context engine already collects. Hidden while searching, where it
+        // would only push the result being aimed at further down.
         if (trimmedQuery.isEmpty() && suggested.isNotEmpty()) {
-            SectionHeader("建議")
+            SectionHeader("常用")
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -183,7 +194,7 @@ fun AppSearchOverlay(
             Spacer(Modifier.height(12.dp))
         }
 
-        if (trimmedQuery.isEmpty()) {
+        if (trimmedQuery.isEmpty() && !listAllWhenEmpty) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     text = "輸入名稱來尋找 App",
@@ -220,7 +231,10 @@ fun AppSearchOverlay(
             return@Column
         }
 
-        SectionHeader("搜尋結果 · ${results.size}")
+        SectionHeader(
+            if (trimmedQuery.isEmpty()) "全部 App · ${results.size}"
+            else "搜尋結果 · ${results.size}",
+        )
 
         LazyVerticalGrid(
             columns = GridCells.Adaptive(density.drawerCellDp.dp),

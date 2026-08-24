@@ -29,7 +29,12 @@ class DeviceCalendarSource(
     fun today(): AgendaSummary {
         if (!hasPermission()) return AgendaSummary()
         val now = clock()
-        return Agenda.summarise(runCatching { read(now) }.getOrDefault(emptyList()), now)
+        val endOfToday = startOfDay(now) + DAY_MS
+        return Agenda.summarise(
+            events = runCatching { read(now) }.getOrDefault(emptyList()),
+            now = now,
+            endOfToday = endOfToday,
+        )
     }
 
     /** `HH:mm` for an instant, in the device's own zone. */
@@ -43,7 +48,9 @@ class DeviceCalendarSource(
 
     private fun read(now: Long): List<AgendaEvent> {
         val start = startOfDay(now)
-        val end = start + DAY_MS
+        // Two days, not one: "what is left today" answers the next hour, and
+        // "what is tomorrow" is the thing you actually plan an evening around.
+        val end = start + DAY_MS * DAYS
 
         val uri = CalendarContract.Instances.CONTENT_URI.buildUpon()
             .appendPath(start.toString())
@@ -98,7 +105,8 @@ class DeviceCalendarSource(
 
     private companion object {
         const val DAY_MS = 24L * 60 * 60 * 1000
-        const val MAX_EVENTS = 20
+        const val DAYS = 2
+        const val MAX_EVENTS = 40
         const val UNTITLED = "(未命名)"
 
         val PROJECTION = arrayOf(

@@ -45,8 +45,10 @@ data class AgendaEvent(
 data class AgendaSummary(
     val events: List<AgendaEvent> = emptyList(),
     val nextIndex: Int = -1,
+    /** The same events, split at midnight. Tomorrow may be empty. */
+    val tomorrow: List<AgendaEvent> = emptyList(),
 ) {
-    val isEmpty: Boolean get() = events.isEmpty()
+    val isEmpty: Boolean get() = events.isEmpty() && tomorrow.isEmpty()
     val next: AgendaEvent? get() = events.getOrNull(nextIndex)
     val remaining: Int get() = if (nextIndex < 0) 0 else events.size - nextIndex
 }
@@ -89,10 +91,25 @@ object Agenda {
      * day and say nothing about what happens at three o'clock, which is the
      * same reason the context engine ignores them.
      */
-    fun summarise(events: List<AgendaEvent>, now: Long): AgendaSummary {
+    fun summarise(
+        events: List<AgendaEvent>,
+        now: Long,
+        /**
+         * Midnight tonight. Anything at or after it is tomorrow's.
+         *
+         * Passed in rather than computed: the boundary depends on the device's
+         * time zone, and a pure function has no business asking about one.
+         */
+        endOfToday: Long = Long.MAX_VALUE,
+    ): AgendaSummary {
         if (events.isEmpty()) return AgendaSummary()
 
-        val ordered = events.sortedWith(
+        val split = events.partition { it.startMillis < endOfToday }
+        val tomorrow = split.second.sortedWith(
+            compareBy<AgendaEvent> { it.allDay }.thenBy { it.startMillis }.thenBy { it.id },
+        )
+
+        val ordered = split.first.sortedWith(
             compareBy<AgendaEvent> { it.allDay }
                 .thenBy { it.startMillis }
                 // Ties break on id so the list cannot reshuffle between reads.
@@ -102,7 +119,7 @@ object Agenda {
         // still the next thing — which is what someone glancing at a home
         // screen wants to see.
         val index = ordered.indexOfFirst { !it.allDay && it.endMillis > now }
-        return AgendaSummary(ordered, index)
+        return AgendaSummary(ordered, index, tomorrow)
     }
 
     /** `09:05`, always four digits and a colon. */

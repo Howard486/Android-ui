@@ -1,6 +1,7 @@
 package com.foldspace.launcher.calendar
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -99,6 +100,56 @@ class AgendaTest {
         assertEquals("23:59", Agenda.timeLabel(23, 59))
         assertEquals("00:00", Agenda.timeLabel(-1, -1))
         assertEquals("23:59", Agenda.timeLabel(99, 99))
+    }
+
+    @Test
+    fun `events past midnight become tomorrow's`() {
+        val midnight = 100_000L
+        val summary = Agenda.summarise(
+            listOf(event(1, midnight - 10), event(2, midnight + 10), event(3, midnight + 20)),
+            now = 0,
+            endOfToday = midnight,
+        )
+        assertEquals(listOf(1L), summary.events.map { it.id })
+        assertEquals(listOf(2L, 3L), summary.tomorrow.map { it.id })
+    }
+
+    @Test
+    fun `an event starting exactly at midnight belongs to tomorrow`() {
+        val midnight = 100_000L
+        val summary = Agenda.summarise(listOf(event(1, midnight)), now = 0, endOfToday = midnight)
+        assertTrue(summary.events.isEmpty())
+        assertEquals(listOf(1L), summary.tomorrow.map { it.id })
+    }
+
+    @Test
+    fun `tomorrow is ordered the same way today is`() {
+        val midnight = 100L
+        val summary = Agenda.summarise(
+            listOf(
+                event(1, midnight + 500, allDay = true),
+                event(2, midnight + 900),
+                event(3, midnight + 200),
+            ),
+            now = 0,
+            endOfToday = midnight,
+        )
+        assertEquals(listOf(3L, 2L, 1L), summary.tomorrow.map { it.id })
+    }
+
+    @Test
+    fun `a day with nothing left today but something tomorrow is not empty`() {
+        val summary = Agenda.summarise(listOf(event(1, 500)), now = 0, endOfToday = 100)
+        assertTrue(summary.events.isEmpty())
+        assertFalse(summary.isEmpty)
+        assertNull(summary.next)
+    }
+
+    @Test
+    fun `with no boundary given everything is today, as before`() {
+        val summary = Agenda.summarise(listOf(event(1, 0), event(2, 999_999_999)), now = 0)
+        assertEquals(2, summary.events.size)
+        assertTrue(summary.tomorrow.isEmpty())
     }
 }
 

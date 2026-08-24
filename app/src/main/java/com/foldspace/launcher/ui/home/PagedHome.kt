@@ -98,14 +98,15 @@ fun PagedHome(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     feedContent: (@Composable () -> Unit)? = null,
     workContent: (@Composable () -> Unit)? = null,
-    libraryContent: (@Composable () -> Unit)? = null,
     dockContent: (@Composable () -> Unit)? = null,
 ) {
     val gridPages = layout.pages.ifEmpty { listOf(HomePage(0, emptyList())) }
     val leadingCount = if (layout.leading != null) 1 else 0
-    // iOS puts the App Library past the last page. It is a view of the same
-    // apps, so it costs the arrangement nothing to always be there.
-    val trailingCount = if (libraryContent != null) 1 else 0
+    // No trailing page any more. The App Library was a second listing of
+    // every app, and with the desktop already holding all of them — there is
+    // no drawer — it was a duplicate you could rearrange by accident. One-tap
+    // organise groups the real icons instead, which is the thing that lasts.
+    val trailingCount = 0
     val pagerState = rememberPagerState(
         // Land on the first grid page, not on the feed. Opening the launcher
         // into a news feed rather than your apps would be the wrong default
@@ -136,16 +137,12 @@ fun PagedHome(
             ) { pagerIndex ->
                 val leading = layout.leading.takeIf { pagerIndex < leadingCount }
                 val page = gridPages.getOrNull(pagerIndex - leadingCount)
-                val isLibrary = trailingCount > 0 &&
-                    pagerIndex == gridPages.size + leadingCount
                 when {
                     leading == PageKind.Feed ->
                         feedContent?.invoke() ?: EmptyPage("尚未設定新聞來源")
 
                     leading == PageKind.Work ->
                         workContent?.invoke() ?: EmptyPage("尚無工項")
-
-                    isLibrary -> libraryContent?.invoke() ?: EmptyPage("沒有可分類的 App")
 
                     page == null -> EmptyPage("這一頁還是空的")
 

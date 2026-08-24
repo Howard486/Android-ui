@@ -51,7 +51,6 @@ import com.foldspace.launcher.ui.home.FolderSheet
 import com.foldspace.launcher.ui.widgets.WidgetPicker
 import com.foldspace.launcher.ui.work.WorkItemsPage
 import com.foldspace.launcher.ui.drawer.AppSearchOverlay
-import com.foldspace.launcher.ui.home.AppLibraryPage
 import com.foldspace.launcher.ui.home.ItemActionSheet
 import com.foldspace.launcher.ui.home.LocalHapticsEnabled
 import com.foldspace.launcher.ui.home.SimpleAppPicker
@@ -129,7 +128,6 @@ fun FoldSpaceRoot(
     val workItems by viewModel.workItems.collectAsStateWithLifecycle()
     val organiseMessage by viewModel.organiseMessage.collectAsStateWithLifecycle()
     val widgetPickerOpen by viewModel.widgetPickerOpen.collectAsStateWithLifecycle()
-    val appCategories by viewModel.appCategories.collectAsStateWithLifecycle()
     val sheet by viewModel.sheet.collectAsStateWithLifecycle()
     val iconPack by viewModel.iconPack.collectAsStateWithLifecycle()
     val desktopMode by viewModel.desktopMode.collectAsStateWithLifecycle()
@@ -307,27 +305,19 @@ fun FoldSpaceRoot(
                         widgetHost = viewModel.widgetHost(),
                         onAddWidget = viewModel::addWorkWidget,
                         onRemoveWidget = viewModel::removeItem,
+                        onResizeWidget = viewModel::resizeWidget,
+                        onMoveWidget = { item, x, y -> viewModel.moveWorkWidget(item, x, y) },
                         agenda = agenda,
                         timeLabelFor = viewModel::agendaTimeLabel,
                         hasCalendarAccess = state.hasCalendarAccess,
                         onRequestCalendarAccess = onRequestCalendarAccess,
                         microsoft = microsoftState,
                         onJoinMeeting = onOpenLink,
+                        titlesVisible = state.settings.agendaTitlesVisible,
+                        onToggleTitles = viewModel::setAgendaTitlesVisible,
                         onMicrosoftSignIn = viewModel::beginMicrosoftSignIn,
                         onMicrosoftSignOut = viewModel::signOutMicrosoft,
                         onConfigureMicrosoft = { viewModel.setSettingsOpen(true) },
-                    )
-                },
-                libraryContent = {
-                    AppLibraryPage(
-                        apps = state.apps,
-                        categories = appCategories,
-                        notifications = state.notifications,
-                        density = state.spaceConfig.density,
-                        columns = homeLayout.grid.columns,
-                        onLaunch = viewModel::launch,
-                        onLongPress = viewModel::openAppInfo,
-                        contentPadding = bodyPadding,
                     )
                 },
                 onLaunch = viewModel::launch,
@@ -355,12 +345,19 @@ fun FoldSpaceRoot(
             AppSearchOverlay(
                 apps = state.apps,
                 notifications = state.notifications,
-                suggested = state.dockApps(),
+                // What gets opened, not what is pinned — the dock already
+                // shows the pins, and repeating them here helps nobody.
+                suggested = state.frequentApps(),
                 onLaunch = {
                     viewModel.setDrawerOpen(false)
                     viewModel.launch(it)
                 },
                 onLongPress = viewModel::openAppInfo,
+                // Start lists everything; the swipe-up gesture stays a search
+                // box. With the App Library gone this is where "show me all of
+                // them" lives, and on the folded screen the desktop already is
+                // that list.
+                listAllWhenEmpty = desktopMode,
                 contentPadding = systemPadding,
                 density = state.spaceConfig.density,
             )
@@ -591,6 +588,7 @@ fun FoldSpaceRoot(
                 onSetDockShape = viewModel::setDockShape,
                 onSetDesktopModeOnUnfold = viewModel::setDesktopModeOnUnfold,
                 onSetMicrosoftClientId = viewModel::setMicrosoftClientId,
+                onCopyPosture = viewModel::copyLayoutToOtherPosture,
                 onPickIconPack = { viewModel.openSheet(LauncherViewModel.Sheet.IconPack) },
                 onExportLayout = {
                     viewModel.setSettingsOpen(false)
@@ -652,7 +650,6 @@ private fun HomeScaffold(
     onCellMeasured: (Int, Int) -> Unit,
     feedContent: @Composable () -> Unit,
     workContent: @Composable () -> Unit,
-    libraryContent: @Composable () -> Unit,
     onLaunch: (AppEntry) -> Unit,
     onLongPress: (AppEntry) -> Unit,
     onSwipeUp: () -> Unit,
@@ -746,7 +743,6 @@ private fun HomeScaffold(
                         contentPadding = bodyPadding,
                         feedContent = feedContent,
                         workContent = workContent,
-                        libraryContent = libraryContent,
                         dockContent = dock,
                     )
                 }
@@ -862,7 +858,9 @@ private fun LauncherHeader(
                 )
             }
 
-            val unread = state.notifications.items.size
+            // Now + Action, not the raw total: 83 is not a number anyone
+            // can do anything about.
+            val unread = state.notifications.actionableCount
             if (editing) {
                 TextAction(text = "頁面", onClick = onOpenPages)
             } else {
