@@ -37,6 +37,44 @@ class DeviceCalendarSource(
         )
     }
 
+    /**
+     * Every calendar the provider holds, whether or not a calendar app draws
+     * it.
+     *
+     * Note what is *not* here: a `VISIBLE = 1` filter. The events query has
+     * never had one either, so a calendar hidden inside Samsung Calendar still
+     * reaches this page — hiding it there is a decision about that app's grid,
+     * not about whether the meeting is happening.
+     */
+    fun calendars(): List<CalendarAccount> {
+        if (!hasPermission()) return emptyList()
+        return runCatching { readCalendars() }.getOrDefault(emptyList())
+    }
+
+    private fun readCalendars(): List<CalendarAccount> {
+        val cursor = context.contentResolver.query(
+            CalendarContract.Calendars.CONTENT_URI,
+            CALENDAR_PROJECTION,
+            null,
+            null,
+            null,
+        ) ?: return emptyList()
+
+        val accounts = mutableListOf<CalendarAccount>()
+        cursor.use {
+            while (it.moveToNext()) {
+                accounts += CalendarAccount(
+                    displayName = it.getString(CAL_DISPLAY_NAME).orEmpty(),
+                    accountName = it.getString(CAL_ACCOUNT_NAME).orEmpty(),
+                    accountType = it.getString(CAL_ACCOUNT_TYPE).orEmpty(),
+                    visible = it.getInt(CAL_VISIBLE) == 1,
+                    syncing = it.getInt(CAL_SYNC_EVENTS) == 1,
+                )
+            }
+        }
+        return accounts
+    }
+
     /** `HH:mm` for an instant, in the device's own zone. */
     fun timeLabelFor(millis: Long): String {
         val calendar = Calendar.getInstance().apply { timeInMillis = millis }
@@ -129,5 +167,18 @@ class DeviceCalendarSource(
         const val INDEX_CALENDAR = 6
         const val INDEX_STATUS = 7
         const val INDEX_DESCRIPTION = 8
+
+        val CALENDAR_PROJECTION = arrayOf(
+            CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
+            CalendarContract.Calendars.ACCOUNT_NAME,
+            CalendarContract.Calendars.ACCOUNT_TYPE,
+            CalendarContract.Calendars.VISIBLE,
+            CalendarContract.Calendars.SYNC_EVENTS,
+        )
+        const val CAL_DISPLAY_NAME = 0
+        const val CAL_ACCOUNT_NAME = 1
+        const val CAL_ACCOUNT_TYPE = 2
+        const val CAL_VISIBLE = 3
+        const val CAL_SYNC_EVENTS = 4
     }
 }

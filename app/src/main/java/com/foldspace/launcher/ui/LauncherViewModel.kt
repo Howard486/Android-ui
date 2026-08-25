@@ -48,6 +48,8 @@ import com.foldspace.launcher.settings.FoldSpaceSettings
 import com.foldspace.launcher.desktop.FreeformState
 import com.foldspace.launcher.microsoft.MicrosoftState
 import com.foldspace.launcher.calendar.AgendaSummary
+import com.foldspace.launcher.calendar.CalendarAccount
+import com.foldspace.launcher.calendar.CalendarAccounts
 import com.foldspace.launcher.quick.QuickController
 import com.foldspace.launcher.usage.ScreenTimeSummary
 import com.foldspace.launcher.settings.GridChoice
@@ -1209,6 +1211,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun deviceAgenda(): AgendaSummary = container.deviceCalendar.today()
 
     fun agendaTimeLabel(millis: Long): String = container.deviceCalendar.timeLabelFor(millis)
+
+    /**
+     * Which calendars the device holds, so the page can say whether Outlook's
+     * is among them instead of leaving an empty day ambiguous.
+     */
+    fun calendarAccounts(): List<CalendarAccount> = container.deviceCalendar.calendars()
+
+    /** Outlook's own app, when it is installed. */
+    fun outlookInstalled(): Boolean =
+        state.value.allApps.any { it.packageName == CalendarAccounts.OUTLOOK_PACKAGE }
 
     // ---- Microsoft ----
 

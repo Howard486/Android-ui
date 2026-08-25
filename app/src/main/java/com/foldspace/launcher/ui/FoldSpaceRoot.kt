@@ -46,6 +46,7 @@ import com.foldspace.launcher.ui.components.Pill
 import com.foldspace.launcher.home.HomeItem
 import com.foldspace.launcher.home.HomeItemType
 import com.foldspace.launcher.home.HomeLayout
+import com.foldspace.launcher.calendar.CalendarAccounts
 import com.foldspace.launcher.ui.feed.FeedPage
 import com.foldspace.launcher.ui.hub.HubPage
 import com.foldspace.launcher.ui.hub.HubTab
@@ -122,6 +123,7 @@ fun FoldSpaceRoot(
     onExportLayout: () -> Unit,
     onImportLayout: () -> Unit,
     onRequestCalendarAccess: () -> Unit,
+    onOpenSyncSettings: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val drawerOpen by viewModel.drawerOpen.collectAsStateWithLifecycle()
@@ -293,6 +295,12 @@ fun FoldSpaceRoot(
                             val agenda = remember(state.hasCalendarAccess, workItems) {
                                 viewModel.deviceAgenda()
                             }
+                            // Read alongside the agenda, from the same
+                            // provider, so the card can say whether Outlook's
+                            // calendar is one of the ones it just read.
+                            val calendars = remember(state.hasCalendarAccess, workItems) {
+                                viewModel.calendarAccounts()
+                            }
                             WorkItemsPage(
                                 state = workItems,
                                 onOpenApp = onOpenPackage,
@@ -307,9 +315,17 @@ fun FoldSpaceRoot(
                                     viewModel.moveWorkWidget(item, x, y)
                                 },
                                 agenda = agenda,
+                                calendars = calendars,
                                 timeLabelFor = viewModel::agendaTimeLabel,
                                 hasCalendarAccess = state.hasCalendarAccess,
                                 onRequestCalendarAccess = onRequestCalendarAccess,
+                                outlookInstalled = remember(state.allApps) {
+                                    viewModel.outlookInstalled()
+                                },
+                                onOpenOutlook = {
+                                    onOpenPackage(CalendarAccounts.OUTLOOK_PACKAGE)
+                                },
+                                onOpenSyncSettings = onOpenSyncSettings,
                                 microsoft = microsoftState,
                                 onJoinMeeting = onOpenLink,
                                 titlesVisible = state.settings.agendaTitlesVisible,

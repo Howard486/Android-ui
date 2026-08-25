@@ -186,3 +186,98 @@ object MeetingLink {
  * category and the time are enough to plan around; the title is one tap away.
  */
 fun AgendaEvent.collapsedLabel(): String = category.label
+
+/**
+ * One calendar the device's provider knows about.
+ *
+ * Read so the page can answer "is my Outlook calendar in here?" on the device
+ * rather than leaving the user to guess from an empty list — which is the same
+ * ambiguity the work-items banner exists to remove.
+ */
+data class CalendarAccount(
+    val displayName: String,
+    val accountName: String,
+    val accountType: String,
+    /** Whether a calendar app would draw it. FoldSpace reads it either way. */
+    val visible: Boolean,
+    /** Whether the provider is syncing it. Off means the events are stale. */
+    val syncing: Boolean,
+) {
+    val isOutlook: Boolean get() = CalendarAccounts.isOutlook(accountType, accountName)
+
+    /** The account, or the calendar's own name when the account is a raw id. */
+    fun label(): String = accountName.takeIf { it.isNotBlank() && '@' in it }
+        ?: displayName.takeIf { it.isNotBlank() }
+        ?: accountName.takeIf { it.isNotBlank() }
+        ?: accountType
+}
+
+/** Where Outlook's calendar stands on this device. */
+enum class OutlookStatus {
+    /** No calendars at all — nothing has ever synced here. */
+    NoCalendars,
+
+    /** Calendars exist, but none of them is Outlook's. */
+    Missing,
+
+    /** Outlook's calendar is here but the provider is not syncing it. */
+    NotSyncing,
+
+    /** Outlook's calendar is here and syncing. Its events are already shown. */
+    Present,
+}
+
+/**
+ * Recognising an Outlook calendar among the device's accounts.
+ *
+ * Pure, because it is a list of vendor strings and the only other way to check
+ * one is wrong is to install the app and look. Outlook for Android registers
+ * its own account type; a work mailbox added through the system arrives as an
+ * Exchange/ActiveSync account instead, and Samsung uses its own name for that.
+ * All three are the same thing to the person asking.
+ */
+object CalendarAccounts {
+
+    /**
+     * Outlook for Android.
+     *
+     * Named here rather than in the UI because the page has to point at the
+     * app: its calendar reaches FoldSpace only through the device provider,
+     * and the switch that puts it there lives inside Outlook.
+     */
+    const val OUTLOOK_PACKAGE = "com.microsoft.office.outlook"
+
+    private val TYPES = listOf(
+        "com.microsoft.office.outlook",
+        "com.microsoft.exchange",
+        "com.samsung.android.exchange",
+        "com.android.exchange",
+        "exchange",
+        "activesync",
+        "office365",
+        "eas",
+    )
+
+    private val DOMAINS = listOf("@outlook.", "@hotmail.", "@live.", "@msn.")
+
+    fun isOutlook(accountType: String?, accountName: String?): Boolean {
+        val type = accountType.orEmpty().lowercase()
+        if (TYPES.any { type.contains(it) }) return true
+        val name = accountName.orEmpty().lowercase()
+        return DOMAINS.any { name.contains(it) }
+    }
+
+    fun outlookStatus(accounts: List<CalendarAccount>): OutlookStatus {
+        val outlook = accounts.filter { it.isOutlook }
+        return when {
+            accounts.isEmpty() -> OutlookStatus.NoCalendars
+            outlook.isEmpty() -> OutlookStatus.Missing
+            outlook.none { it.syncing } -> OutlookStatus.NotSyncing
+            else -> OutlookStatus.Present
+        }
+    }
+
+    /** Account labels, deduplicated, in a stable order. */
+    fun labels(accounts: List<CalendarAccount>): List<String> =
+        accounts.map { it.label() }.filter { it.isNotBlank() }.distinct().sorted()
+}

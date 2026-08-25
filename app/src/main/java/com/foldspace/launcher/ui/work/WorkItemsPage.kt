@@ -39,6 +39,9 @@ import androidx.compose.foundation.background
 import com.foldspace.launcher.calendar.collapsedLabel
 import com.foldspace.launcher.calendar.AgendaEvent
 import com.foldspace.launcher.calendar.AgendaSummary
+import com.foldspace.launcher.calendar.CalendarAccount
+import com.foldspace.launcher.calendar.CalendarAccounts
+import com.foldspace.launcher.calendar.OutlookStatus
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Alignment
@@ -79,9 +82,13 @@ fun WorkItemsPage(
     onResizeWidget: (HomeItem, Int, Int) -> Unit,
     onMoveWidget: (HomeItem, Int, Int) -> Unit,
     agenda: AgendaSummary,
+    calendars: List<CalendarAccount>,
     timeLabelFor: (Long) -> String,
     hasCalendarAccess: Boolean,
     onRequestCalendarAccess: () -> Unit,
+    outlookInstalled: Boolean,
+    onOpenOutlook: () -> Unit,
+    onOpenSyncSettings: () -> Unit,
     titlesVisible: Boolean,
     onToggleTitles: (Boolean) -> Unit,
     microsoft: MicrosoftState,
@@ -115,40 +122,23 @@ fun WorkItemsPage(
     ) {
         Spacer(Modifier.height(12.dp))
 
-        // The calendar leads. It is the one thing on this page that is true
-        // without any account, any permission beyond the calendar itself, and
-        // any setup — and it is what you actually want to see when you look at
-        // a summary. Everything below it is context for it.
+        // Order, top to bottom: what is happening, then what is waiting, then
+        // the extras. The calendar leads because it is the one thing here that
+        // is true with no account, no setup and no network. The widgets go
+        // last because they are the part you arrange once and then stop
+        // looking at.
         AgendaSection(
             agenda = agenda,
+            calendars = calendars,
             timeLabelFor = timeLabelFor,
             hasAccess = hasCalendarAccess,
             onRequestAccess = onRequestCalendarAccess,
             onJoin = onJoinMeeting,
             titlesVisible = titlesVisible,
             onToggleTitles = onToggleTitles,
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        WorkWidgets(
-            layout = widgets,
-            widgetHost = widgetHost,
-            onAdd = onAddWidget,
-            onRemove = onRemoveWidget,
-            onResize = onResizeWidget,
-            onMove = onMoveWidget,
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        header?.invoke(this)
-
-        MicrosoftSection(
-            state = microsoft,
-            onSignIn = onMicrosoftSignIn,
-            onSignOut = onMicrosoftSignOut,
-            onConfigure = onConfigureMicrosoft,
+            outlookInstalled = outlookInstalled,
+            onOpenOutlook = onOpenOutlook,
+            onOpenSyncSettings = onOpenSyncSettings,
         )
 
         Spacer(Modifier.height(16.dp))
@@ -170,8 +160,12 @@ fun WorkItemsPage(
 
         Spacer(Modifier.height(12.dp))
 
-        if (!state.listenerConnected) {
-            FoldCard(Modifier.fillMaxWidth()) {
+        // Branches rather than early returns. This section used to end the
+        // whole page when it had nothing to show, so an empty inbox took the
+        // widgets and the Microsoft card down with it — which is a strange way
+        // for good news to behave.
+        when {
+            !state.listenerConnected -> FoldCard(Modifier.fillMaxWidth()) {
                 Text(
                     text = "尚未授予通知存取權",
                     style = MaterialTheme.typography.titleMedium,
@@ -194,55 +188,77 @@ fun WorkItemsPage(
                         .padding(4.dp),
                 )
             }
-            return@Column
-        }
 
-        SourceCaveat()
-        Spacer(Modifier.height(12.dp))
-
-        if (state.groups.isEmpty()) {
-            Box(
-                Modifier.fillMaxWidth().height(EMPTY_HEIGHT),
-                contentAlignment = Alignment.Center,
-            ) {
+            state.groups.isEmpty() -> {
+                SourceCaveat()
+                Spacer(Modifier.height(12.dp))
                 Text(
                     text = "目前沒有待處理的工項",
                     style = MaterialTheme.typography.bodyMedium,
                     color = tokens.textMuted,
                 )
             }
-            return@Column
-        }
 
-        // A plain column, not a LazyColumn: one cannot be nested inside a
-        // scrolling parent, and this list is a handful of notifications rather
-        // than something worth virtualising.
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            state.groups.forEach { group ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onOpenApp(group.packageName) }
-                        .padding(top = 6.dp, bottom = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = group.displayName,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = tokens.textPrimary,
-                    )
-                    Text(
-                        text = "開啟",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = tokens.accent,
-                    )
-                }
-                group.items.forEach { workItem ->
-                    WorkItemRow(item = workItem, onClick = { onOpenApp(workItem.packageName) })
+            else -> {
+                SourceCaveat()
+                Spacer(Modifier.height(12.dp))
+                // A plain column, not a LazyColumn: one cannot be nested
+                // inside a scrolling parent, and this list is a handful of
+                // notifications rather than something worth virtualising.
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    state.groups.forEach { group ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpenApp(group.packageName) }
+                                .padding(top = 6.dp, bottom = 2.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = group.displayName,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = tokens.textPrimary,
+                            )
+                            Text(
+                                text = "開啟",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = tokens.accent,
+                            )
+                        }
+                        group.items.forEach { workItem ->
+                            WorkItemRow(
+                                item = workItem,
+                                onClick = { onOpenApp(workItem.packageName) },
+                            )
+                        }
+                    }
                 }
             }
         }
+
+        Spacer(Modifier.height(16.dp))
+
+        header?.invoke(this)
+
+        MicrosoftSection(
+            state = microsoft,
+            onSignIn = onMicrosoftSignIn,
+            onSignOut = onMicrosoftSignOut,
+            onConfigure = onConfigureMicrosoft,
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        WorkWidgets(
+            layout = widgets,
+            widgetHost = widgetHost,
+            onAdd = onAddWidget,
+            onRemove = onRemoveWidget,
+            onResize = onResizeWidget,
+            onMove = onMoveWidget,
+        )
+
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -510,12 +526,16 @@ private fun MicrosoftSection(
 @Composable
 private fun AgendaSection(
     agenda: AgendaSummary,
+    calendars: List<CalendarAccount>,
     timeLabelFor: (Long) -> String,
     hasAccess: Boolean,
     onRequestAccess: () -> Unit,
     onJoin: (String) -> Unit,
     titlesVisible: Boolean,
     onToggleTitles: (Boolean) -> Unit,
+    outlookInstalled: Boolean,
+    onOpenOutlook: () -> Unit,
+    onOpenSyncSettings: () -> Unit,
 ) {
     val tokens = FoldSpaceTheme.tokens
     // Which rows the user has opened, this composition only. Deliberately not
@@ -567,10 +587,16 @@ private fun AgendaSection(
         if (agenda.isEmpty) {
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "今天和明天都沒有行程。如果 Outlook 的行事曆沒有出現，請到 Outlook " +
-                    "的帳號設定把「同步日曆」打開 —— 它預設不一定會寫進系統行事曆。",
+                text = "今天和明天都沒有行程。",
                 style = MaterialTheme.typography.bodySmall,
                 color = tokens.textMuted,
+            )
+            Spacer(Modifier.height(8.dp))
+            CalendarSources(
+                calendars = calendars,
+                outlookInstalled = outlookInstalled,
+                onOpenOutlook = onOpenOutlook,
+                onOpenSyncSettings = onOpenSyncSettings,
             )
             return@FoldCard
         }
@@ -615,6 +641,82 @@ private fun AgendaSection(
                 )
             }
         }
+
+        Spacer(Modifier.height(10.dp))
+        CalendarSources(
+            calendars = calendars,
+            outlookInstalled = outlookInstalled,
+            onOpenOutlook = onOpenOutlook,
+            onOpenSyncSettings = onOpenSyncSettings,
+        )
+    }
+}
+
+/**
+ * Which calendars this is reading, and where Outlook's stands.
+ *
+ * "Can it get my Outlook calendar?" has one honest answer: yes, once Outlook
+ * syncs it into the device provider, because that is the only interface
+ * Outlook exposes on the device. What was missing was any way to tell from the
+ * phone whether that had happened — an empty day meant "nothing on" or "your
+ * work calendar was never here" and the page could not say which. It can now.
+ *
+ * Note it lists what is *read*, not what is visible: no `VISIBLE = 1` filter
+ * has ever been applied, so a calendar hidden inside Samsung Calendar is still
+ * on this list and its events are still on this page.
+ */
+@Composable
+private fun CalendarSources(
+    calendars: List<CalendarAccount>,
+    outlookInstalled: Boolean,
+    onOpenOutlook: () -> Unit,
+    onOpenSyncSettings: () -> Unit,
+) {
+    val tokens = FoldSpaceTheme.tokens
+    val status = remember(calendars) { CalendarAccounts.outlookStatus(calendars) }
+    val labels = remember(calendars) { CalendarAccounts.labels(calendars) }
+
+    if (labels.isNotEmpty()) {
+        Text(
+            text = "來源：" + labels.joinToString("、"),
+            style = MaterialTheme.typography.labelSmall,
+            color = tokens.textMuted,
+        )
+    }
+
+    val advice = when (status) {
+        OutlookStatus.Present -> null
+
+        OutlookStatus.NoCalendars ->
+            "這台裝置上沒有任何行事曆帳號。要看到 Outlook 的會議，先在 Outlook 裡登入，" +
+                "再把「同步處理行事曆」打開。"
+
+        OutlookStatus.Missing ->
+            "沒有看到 Outlook 的行事曆。Outlook 不會直接開放給其他 App 讀 —— 它要先把" +
+                "行事曆同步進系統：Outlook →「設定」→ 選你的帳號 →「同步處理行事曆」。" +
+                "打開之後這裡就會自己出現，不需要任何登入。"
+
+        OutlookStatus.NotSyncing ->
+            "Outlook 的行事曆在這台裝置上，但同步是關掉的，所以內容可能是舊的。" +
+                "到「帳號與同步」把它打開。"
+    } ?: return
+
+    Spacer(Modifier.height(6.dp))
+    Text(
+        text = advice,
+        style = MaterialTheme.typography.labelSmall,
+        color = tokens.textSecondary,
+    )
+
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (outlookInstalled && status != OutlookStatus.NotSyncing) {
+            TextAction(text = "開啟 Outlook", onClick = onOpenOutlook)
+        }
+        TextAction(
+            text = "帳號與同步",
+            onClick = onOpenSyncSettings,
+            color = if (status == OutlookStatus.NotSyncing) tokens.accent else tokens.textSecondary,
+        )
     }
 }
 
@@ -865,4 +967,3 @@ private const val STRIP_ROW_DP = 104
 
 
 /** Enough to read as deliberate emptiness rather than a truncated page. */
-private val EMPTY_HEIGHT = 160.dp

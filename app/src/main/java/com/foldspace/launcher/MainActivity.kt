@@ -178,6 +178,7 @@ class MainActivity : FragmentActivity() {
                     onExportLayout = ::exportLayout,
                     onImportLayout = ::importLayout,
                     onRequestCalendarAccess = ::requestCalendarAccess,
+                    onOpenSyncSettings = ::openSyncSettings,
                 )
             }
         }
@@ -297,6 +298,27 @@ class MainActivity : FragmentActivity() {
 
     private fun openNotificationListenerSettings() {
         runCatching { startActivity(FoldSpaceNotificationListener.settingsIntent()) }
+    }
+
+    /**
+     * Accounts & sync, where a calendar that is present but not syncing is
+     * turned back on. Falls back to the general settings screen on the
+     * handful of OEM builds that have no sync activity to open.
+     */
+    private fun openSyncSettings() {
+        val opened = runCatching {
+            startActivity(
+                Intent(Settings.ACTION_SYNC_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            true
+        }.getOrDefault(false)
+        if (opened) return
+        runCatching {
+            startActivity(
+                Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
     }
 
     private fun openUsageAccessSettings() {
